@@ -1,0 +1,608 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Drift</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;1,400&family=Inter:wght@300;400&display=swap" rel="stylesheet">
+<style>
+  :root { --fg:#f3ecff; --dim:rgba(243,236,255,.55); --line:rgba(243,236,255,.16); --bg:#070a1c; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); overflow:hidden; user-select:none;
+    font-family: Inter, -apple-system, system-ui, sans-serif; font-weight:300; }
+  canvas#gl { position:fixed; inset:0; display:block; cursor:none; }
+  #hud { position:fixed; inset:0; pointer-events:none; transition:opacity 1.2s; }
+  #hud.off { opacity:0; }
+  .count { position:absolute; top:22px; left:24px; font-family:'Cormorant Garamond', serif; font-size:22px; letter-spacing:.06em; }
+  .count small { display:block; font-family:Inter, sans-serif; font-size:10px; letter-spacing:.3em; color:var(--dim); text-transform:uppercase; margin-top:2px; }
+  .listen { position:absolute; top:26px; right:24px; font-size:10px; letter-spacing:.3em; color:var(--dim); text-transform:uppercase; display:flex; align-items:center; gap:10px; }
+  #dot { width:7px; height:7px; border-radius:50%; background:var(--fg); opacity:.25; box-shadow:0 0 12px var(--fg); }
+  #hint { position:absolute; bottom:28px; width:100%; text-align:center; font-size:11px; letter-spacing:.28em; color:var(--dim); text-transform:uppercase; transition:opacity 2s; }
+  #whisper { position:absolute; top:38%; width:100%; text-align:center; font-family:'Cormorant Garamond', serif; font-style:italic;
+    font-size:clamp(26px, 4.5vw, 44px); color:var(--fg); opacity:0; text-shadow:0 0 30px rgba(255,255,255,.35); }
+  #overlay { position:fixed; inset:0; display:grid; place-items:center; background:radial-gradient(ellipse at center, rgba(7,10,28,.45), rgba(7,10,28,.85)); transition:opacity 1.4s; }
+  #overlay.hidden { opacity:0; pointer-events:none; }
+  .panel { width:min(520px, calc(100% - 32px)); text-align:center; }
+  h1 { margin:0; font-family:'Cormorant Garamond', serif; font-weight:400; font-size:clamp(56px, 12vw, 96px); letter-spacing:.18em; text-indent:.18em; text-shadow:0 0 40px rgba(220,200,255,.45); }
+  .sub { color:var(--dim); margin:8px auto 34px; font-size:14px; line-height:1.8; max-width:400px; }
+  .choices { display:grid; grid-template-columns:1fr 1fr; gap:10px; text-align:left; }
+  @media (max-width:480px) { .choices { grid-template-columns:1fr; } }
+  button.src { all:unset; cursor:pointer; padding:16px 18px; border-radius:14px; border:1px solid var(--line); background:rgba(255,255,255,.03);
+    transition:background .3s, border-color .3s; }
+  button.src:hover, button.src:focus-visible { background:rgba(255,255,255,.08); border-color:rgba(243,236,255,.4); }
+  button.src b { display:block; font-weight:400; font-size:14px; margin-bottom:4px; }
+  button.src span { font-size:12px; color:var(--dim); line-height:1.5; }
+  #err { color:#ffb3c7; font-size:12px; margin-top:16px; min-height:1em; }
+  .keys { margin-top:22px; font-size:11px; color:var(--dim); letter-spacing:.08em; line-height:1.9; }
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+
+<div id="hud" class="off">
+  <div class="count"><span id="count">0</span><small>lights gathered</small></div>
+  <div class="listen"><span id="dot"></span><span id="srcLabel">listening</span></div>
+  <div id="whisper"></div>
+  <div id="hint">move the mouse or use ← → to drift · H hides this · P to rest</div>
+</div>
+
+<div id="overlay">
+  <div class="panel" id="menuPanel">
+    <h1>DRIFT</h1>
+    <p class="sub">Put on a playlist you love. Float over a quiet sea while the sky, the water and the lights breathe with your music. Nothing to lose — just drift.</p>
+    <div class="choices">
+      <button class="src" data-src="tab"><b>Spotify in Chrome</b><span>Play on open.spotify.com, choose that tab and switch on "Share tab audio".</span></button>
+      <button class="src" data-src="mic"><b>Listen through mic</b><span>Play the Spotify app out loud on your speakers.</span></button>
+      <button class="src" data-src="file"><b>A song from disk</b><span>Pick an MP3 or WAV file.</span></button>
+      <button class="src" data-src="demo"><b>Ambient demo</b><span>A soft built-in piece to try it out.</span></button>
+    </div>
+    <div id="err"></div>
+    <div class="keys">mouse or ← → to drift · ↑ ↓ to rise and settle · H hide interface · P rest</div>
+  </div>
+</div>
+<input type="file" id="fileIn" accept="audio/*" hidden>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+const $ = id => document.getElementById(id);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const damp = (a, b, rate, dt) => lerp(a, b, 1 - Math.exp(-rate * dt));
+const rand = (a, b) => a + Math.random() * (b - a);
+
+/* =========================================================
+   AUDIO — sources + gentle analysis
+   ========================================================= */
+const A = {
+  ctx: null, analyser: null, freq: null, prev: null, nodes: [], stream: null, timer: null, el: null,
+  bass: 0, mid: 0, treble: 0, level: 0, centroid: 0.3,
+  fluxHist: [], hatHist: [], lastBeat: -1, lastHat: -1, shortAvg: 0, longAvg: 0, lastSwell: -99,
+};
+
+function ensureCtx() {
+  if (!A.ctx) {
+    A.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    A.analyser = A.ctx.createAnalyser();
+    A.analyser.fftSize = 2048;
+    A.analyser.smoothingTimeConstant = 0.5;
+    A.freq = new Uint8Array(A.analyser.frequencyBinCount);
+    A.prev = new Uint8Array(A.analyser.frequencyBinCount);
+  }
+  if (A.ctx.state === 'suspended') A.ctx.resume();
+}
+function stopSource() {
+  clearInterval(A.timer); A.timer = null;
+  A.nodes.forEach(n => { try { n.disconnect(); } catch {} });
+  A.nodes = [];
+  if (A.stream) { A.stream.getTracks().forEach(t => t.stop()); A.stream = null; }
+  if (A.el) { A.el.pause(); A.el.src = ''; A.el = null; }
+  try { A.analyser.disconnect(); } catch {}
+}
+function route(node, audible) {
+  node.connect(A.analyser);
+  if (audible) A.analyser.connect(A.ctx.destination);
+  A.nodes.push(node);
+}
+async function startSource(kind) {
+  ensureCtx(); stopSource();
+  if (kind === 'tab') {
+    if (!navigator.mediaDevices?.getDisplayMedia) throw new Error('Tab capture needs Chrome. Or choose "Listen through mic".');
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: true, audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      systemAudio: 'include', selfBrowserSurface: 'exclude',
+    });
+    if (!stream.getAudioTracks().length) {
+      stream.getTracks().forEach(t => t.stop());
+      throw new Error('That share had no sound. Pick the Spotify tab and switch on "Share tab audio".');
+    }
+    stream.getVideoTracks().forEach(t => t.stop());
+    A.stream = stream;
+    route(A.ctx.createMediaStreamSource(stream), false);
+  } else if (kind === 'mic') {
+    A.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+    route(A.ctx.createMediaStreamSource(A.stream), false);
+  } else if (kind === 'file') {
+    const file = await new Promise((res, rej) => {
+      const inp = $('fileIn'); inp.value = '';
+      inp.onchange = () => inp.files[0] ? res(inp.files[0]) : rej(new Error('No file chosen.'));
+      inp.click();
+    });
+    A.el = new Audio(URL.createObjectURL(file)); A.el.loop = true;
+    route(A.ctx.createMediaElementSource(A.el), true);
+    await A.el.play();
+  } else {
+    startDemo();
+  }
+}
+
+/* --- ambient demo: soft pads, echoing plucks, a heartbeat-slow pulse --- */
+function startDemo() {
+  const ctx = A.ctx;
+  const master = ctx.createGain(); master.gain.value = 0.5;
+  const delay = ctx.createDelay(2), fb = ctx.createGain(), dlp = ctx.createBiquadFilter();
+  delay.delayTime.value = 60 / 72 * 0.75; fb.gain.value = 0.42; dlp.type = 'lowpass'; dlp.frequency.value = 2200;
+  delay.connect(dlp).connect(fb).connect(delay); dlp.connect(master);
+  route(master, true); A.nodes.push(delay, fb, dlp);
+
+  const noise = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+  const nd = noise.getChannelData(0); for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+  const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
+  const chords = [[57, 60, 64, 67], [53, 57, 60, 64], [48, 52, 55, 59], [55, 59, 62, 64]]; // Am7 Fmaj7 Cmaj7 G6
+  const arp = [0, 2, 1, 3, 2, 1, 3, 2];
+  const beat = 60 / 72, s8 = beat / 2;
+  let next = ctx.currentTime + 0.2, step = 0;
+
+  const pad = (t, notes, dur) => notes.forEach(n => [-6, 6].forEach(det => {
+    const o = ctx.createOscillator(), g = ctx.createGain(), f = ctx.createBiquadFilter();
+    o.type = 'triangle'; o.frequency.value = mtof(n); o.detune.value = det;
+    f.type = 'lowpass'; f.frequency.value = 1400;
+    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.045, t + dur * 0.35); g.gain.linearRampToValueAtTime(0.0001, t + dur);
+    o.connect(f).connect(g).connect(master); o.start(t); o.stop(t + dur + 0.1);
+  }));
+  const pluck = (t, n, v) => {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'sine'; o.frequency.value = mtof(n);
+    g.gain.setValueAtTime(v, t); g.gain.exponentialRampToValueAtTime(0.0008, t + 0.9);
+    o.connect(g); g.connect(master); g.connect(delay); o.start(t); o.stop(t + 1);
+  };
+  const pulse = t => {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.frequency.setValueAtTime(90, t); o.frequency.exponentialRampToValueAtTime(48, t + 0.25);
+    g.gain.setValueAtTime(0.55, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+    o.connect(g).connect(master); o.start(t); o.stop(t + 0.65);
+  };
+  const shaker = t => {
+    const s = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+    s.buffer = noise; f.type = 'highpass'; f.frequency.value = 8000;
+    g.gain.setValueAtTime(0.07, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+    s.connect(f).connect(g).connect(master); s.start(t); s.stop(t + 0.1);
+  };
+  function schedule(st, t) {
+    const bar = Math.floor(st / 8), s = st % 8, ch = chords[bar % 4], section = Math.floor(bar / 8) % 3;
+    if (s === 0) pad(t, ch, beat * 4.2);
+    if (section > 0 && s % 2 === 0 && (s === 0 || section === 2 || s === 4)) pulse(t);
+    if (section > 0 && s % 2 === 1) shaker(t);
+    if (Math.random() < (section === 0 ? 0.45 : 0.8)) pluck(t, ch[arp[s]] + 12 + (Math.random() < 0.2 ? 12 : 0), 0.13);
+  }
+  A.timer = setInterval(() => { while (next < ctx.currentTime + 0.2) { schedule(step, next); next += s8; step++; } }, 30);
+}
+
+/* --- analysis --- */
+function bins(lo, hi) {
+  const hz = A.ctx.sampleRate / A.analyser.fftSize;
+  return [Math.max(1, Math.floor(lo / hz)), Math.min(A.freq.length - 1, Math.ceil(hi / hz))];
+}
+function bandAvg(lo, hi) { const [a, b] = bins(lo, hi); let s = 0; for (let i = a; i <= b; i++) s += A.freq[i]; return s / ((b - a + 1) * 255); }
+function bandFlux(lo, hi) { const [a, b] = bins(lo, hi); let s = 0; for (let i = a; i <= b; i++) { const v = A.freq[i] - A.prev[i]; if (v > 0) s += v; } return s / ((b - a + 1) * 255); }
+function adaptive(h, v, n) {
+  h.push(v); if (h.length > n) h.shift();
+  let m = 0; for (const x of h) m += x; m /= h.length;
+  let sd = 0; for (const x of h) sd += (x - m) ** 2;
+  return m + Math.sqrt(sd / h.length) * 1.5;
+}
+const F = { beat: false, strength: 1, hat: false, swell: false };
+function analyze(now, dt) {
+  F.beat = F.hat = F.swell = false;
+  if (!A.ctx || !A.nodes.length) { A.level = damp(A.level, 0, 2, dt); return; }
+  A.prev.set(A.freq);
+  A.analyser.getByteFrequencyData(A.freq);
+  // smoothed bands — everything visual eases, nothing snaps
+  A.bass = damp(A.bass, bandAvg(30, 160), 8, dt);
+  A.mid = damp(A.mid, bandAvg(300, 2500), 4, dt);
+  A.treble = damp(A.treble, bandAvg(4000, 12000), 6, dt);
+  A.level = damp(A.level, A.bass * 0.45 + A.mid * 0.4 + A.treble * 0.15, 3, dt);
+  let num = 0, den = 0; for (let i = 1; i < 400; i++) { num += i * A.freq[i]; den += A.freq[i]; }
+  A.centroid = damp(A.centroid, den > 0 ? clamp(num / den / 140, 0, 1) : 0.3, 0.5, dt);
+
+  const bf = bandFlux(30, 180), thr = adaptive(A.fluxHist, bf, 50);
+  if (bf > thr && bf > 0.025 && now - A.lastBeat > 0.33) { F.beat = true; F.strength = clamp(bf / Math.max(thr, 0.01), 1, 3); A.lastBeat = now; }
+  const hf = bandFlux(3000, 12000), hthr = adaptive(A.hatHist, hf, 40);
+  if (hf > hthr && hf > 0.015 && now - A.lastHat > 0.18) { F.hat = true; A.lastHat = now; }
+
+  A.shortAvg = damp(A.shortAvg, A.level, 2, dt);
+  A.longAvg = damp(A.longAvg, A.level, 0.15, dt);
+  if (A.shortAvg > A.longAvg * 1.3 && A.shortAvg > 0.18 && now - A.lastSwell > 20) { F.swell = true; A.lastSwell = now; }
+}
+
+/* =========================================================
+   PALETTES — the sky slowly travels between moods
+   ========================================================= */
+const PALETTES = [
+  { name: 'lavender dusk', top: 0x0b1030, horizon: 0x6a4a8c, deep: 0x070a1c, aurora: 0x5fffd0, glow: 0xffb3d9, spirit: 0xffe6b8 },
+  { name: 'midnight tide', top: 0x020a14, horizon: 0x15475a, deep: 0x02070d, aurora: 0x7affb0, glow: 0x8fe3ff, spirit: 0xd0f6ff },
+  { name: 'rose dawn',     top: 0x1a1236, horizon: 0xc96f86, deep: 0x120a18, aurora: 0xffd17a, glow: 0xffc2a8, spirit: 0xfff0d6 },
+  { name: 'violet veil',   top: 0x030612, horizon: 0x26326a, deep: 0x03050c, aurora: 0xc08aff, glow: 0xb4c0ff, spirit: 0xe6deff },
+];
+const pal = {}; const palTarget = {};
+for (const k of ['top', 'horizon', 'deep', 'aurora', 'glow', 'spirit']) { pal[k] = new THREE.Color(PALETTES[0][k]); palTarget[k] = new THREE.Color(PALETTES[0][k]); }
+let palIndex = 0, palTimer = 0;
+function nextPalette() {
+  palIndex = (palIndex + 1) % PALETTES.length; palTimer = 0;
+  for (const k in palTarget) palTarget[k].set(PALETTES[palIndex][k]);
+}
+
+/* =========================================================
+   SCENE
+   ========================================================= */
+const renderer = new THREE.WebGLRenderer({ canvas: $('gl'), antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(58, innerWidth / innerHeight, 0.1, 800);
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.45, 0.6, 0.6);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+
+const U = { uTime: { value: 0 }, uMid: { value: 0 }, uBass: { value: 0 }, uTreble: { value: 0 }, uPulse: { value: 0 } };
+
+// --- sky dome (gradient + aurora + moon), follows the camera ---
+const skyGroup = new THREE.Group(); scene.add(skyGroup);
+const skyMat = new THREE.ShaderMaterial({
+  side: THREE.BackSide, depthWrite: false, fog: false,
+  uniforms: { ...U, uTop: { value: pal.top }, uHorizon: { value: pal.horizon }, uAurora: { value: pal.aurora },
+    uMoon: { value: new THREE.Vector3(-0.35, 0.22, -1).normalize() } },
+  vertexShader: `varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }`,
+  fragmentShader: `
+    uniform vec3 uTop, uHorizon, uAurora, uMoon; uniform float uTime, uMid, uPulse;
+    varying vec3 vDir;
+    void main(){
+      vec3 d = normalize(vDir); float h = d.y;
+      vec3 c = mix(uHorizon, uTop, smoothstep(-0.02, 0.55, h));
+      c = mix(c, uHorizon * 0.55, smoothstep(0.0, -0.2, h));
+      float az = atan(d.x, -d.z);
+      float band = 0.;
+      for (int i = 0; i < 3; i++) {
+        float fi = float(i);
+        float center = 0.24 + fi * 0.07 + 0.05 * sin(az * (1.5 + fi) + uTime * (0.05 + fi * 0.03));
+        float w = 0.025 + 0.02 * uMid;
+        float curtain = exp(-pow((h - center) / w, 2.)) + 0.5 * exp(-pow((h - center - 0.06) / (w * 3.), 2.));
+        float streak = 0.55 + 0.45 * sin(az * 18. + fi * 2.3 + uTime * 0.25 + sin(az * 7. + uTime * 0.2) * 2.);
+        band += curtain * streak * (0.6 + 0.4 * sin(az * 2. - uTime * 0.1 + fi));
+      }
+      c += uAurora * band * (0.06 + uMid * 0.45 + uPulse * 0.06) * smoothstep(0.02, 0.15, h);
+      float m = dot(d, uMoon);
+      c += vec3(1., .97, .9) * smoothstep(0.99975, 0.99988, m) * 1.2;
+      c += uHorizon * pow(max(m, 0.), 60.) * 0.6;
+      gl_FragColor = vec4(c, 1.);
+    }`,
+});
+const sky = new THREE.Mesh(new THREE.SphereGeometry(420, 48, 24), skyMat);
+sky.renderOrder = -2; skyGroup.add(sky);
+
+// stars
+const STARS = 1600, sPos = new Float32Array(STARS * 3), sPh = new Float32Array(STARS), sSz = new Float32Array(STARS);
+for (let i = 0; i < STARS; i++) {
+  const u = Math.random() * Math.PI * 2, y = Math.pow(Math.random(), 0.7) * 0.95 + 0.04, r = Math.sqrt(1 - y * y);
+  sPos.set([Math.cos(u) * r * 400, y * 400, Math.sin(u) * r * 400], i * 3);
+  sPh[i] = Math.random() * 6.28; sSz[i] = Math.pow(Math.random(), 3);
+}
+const starGeo = new THREE.BufferGeometry();
+starGeo.setAttribute('position', new THREE.BufferAttribute(sPos, 3));
+starGeo.setAttribute('aPh', new THREE.BufferAttribute(sPh, 1));
+starGeo.setAttribute('aSz', new THREE.BufferAttribute(sSz, 1));
+const starMat = new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+  uniforms: { ...U, uRatio: { value: renderer.getPixelRatio() } },
+  vertexShader: `attribute float aPh, aSz; uniform float uTime, uTreble, uRatio; varying float vA;
+    void main(){ vA = 0.45 + 0.55 * (0.5 + 0.5 * sin(uTime * (0.6 + aSz) + aPh)) * (0.6 + uTreble * 1.5);
+      gl_PointSize = (1.2 + aSz * 3.) * uRatio; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.); }`,
+  fragmentShader: `varying float vA; void main(){ float d = length(gl_PointCoord - .5); float a = smoothstep(.5, 0., d) * vA; gl_FragColor = vec4(vec3(1., .97, .92) * a, a); }`,
+});
+const stars = new THREE.Points(starGeo, starMat); stars.renderOrder = -1; skyGroup.add(stars);
+
+// constellation of gathered lights (lives in the sky)
+const MAXC = 400, cPos = new Float32Array(MAXC * 3);
+const conGeo = new THREE.BufferGeometry(); conGeo.setAttribute('position', new THREE.BufferAttribute(cPos, 3)); conGeo.setDrawRange(0, 0);
+const conStars = new THREE.Points(conGeo, new THREE.PointsMaterial({ size: 3.2, sizeAttenuation: false, color: 0xfff2d0, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
+const conLines = new THREE.Line(conGeo, new THREE.LineBasicMaterial({ color: 0xfff2d0, transparent: true, opacity: 0.18, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
+skyGroup.add(conStars, conLines);
+let conCount = 0, conAz = rand(-0.5, 0.5), conH = 0.45;
+function addConstellationStar() {
+  if (conCount >= MAXC) return;
+  conAz += rand(-0.12, 0.12) + 0.02; conH = clamp(conH + rand(-0.08, 0.08), 0.3, 0.75);
+  const r = Math.sqrt(1 - conH * conH);
+  cPos.set([Math.sin(conAz) * r * 390, conH * 390, -Math.cos(conAz) * r * 390], conCount * 3);
+  conCount++; conGeo.setDrawRange(0, conCount); conGeo.attributes.position.needsUpdate = true;
+}
+
+// --- water ---
+const RIPPLES = 10;
+const ripples = Array.from({ length: RIPPLES }, () => new THREE.Vector4(0, 0, -99, 0));
+let rippleIdx = 0;
+function addRipple(x, z, strength) { ripples[rippleIdx].set(x, z, U.uTime.value, strength); rippleIdx = (rippleIdx + 1) % RIPPLES; }
+const WATER = 380, WSEG = 230, WSTEP = WATER / WSEG;
+const waterMat = new THREE.ShaderMaterial({
+  uniforms: { ...U, uRipples: { value: ripples }, uDeep: { value: pal.deep }, uHorizon: { value: pal.horizon }, uTop: { value: pal.top },
+    uGlow: { value: pal.glow }, uSpiritCol: { value: pal.spirit }, uSpirit: { value: new THREE.Vector3() } },
+  vertexShader: `
+    uniform float uTime, uBass; uniform vec4 uRipples[${RIPPLES}];
+    varying vec3 vW; varying float vRip; varying vec3 vN;
+    float waves(vec2 p){ return sin(p.x*.13 + uTime*.5)*.35 + sin(p.y*.09 - uTime*.38)*.45 + sin((p.x+p.y)*.27 + uTime*.9)*.1 + sin((p.x-p.y*.6)*.5 + uTime*1.3)*.05; }
+    void main(){
+      vec4 w = modelMatrix * vec4(position, 1.);
+      float h = waves(w.xz) * (0.75 + uBass * 0.5);
+      float rip = 0.;
+      for (int i = 0; i < ${RIPPLES}; i++) {
+        vec4 r = uRipples[i]; float age = uTime - r.z;
+        if (age < 0. || age > 7.) continue;
+        float d = distance(w.xz, r.xy), front = age * 5.5;
+        rip += exp(-pow(d - front, 2.) * .25) * (1. - age / 7.) * r.w;
+      }
+      float k = 0.6 + uBass * 0.4; float e = 0.4;
+      vN = normalize(vec3(waves(w.xz - vec2(e, 0.)) - waves(w.xz + vec2(e, 0.)), 2. * e / k, waves(w.xz - vec2(0., e)) - waves(w.xz + vec2(0., e))));
+      w.y += h + rip * .35; vW = w.xyz; vRip = rip;
+      gl_Position = projectionMatrix * viewMatrix * w;
+    }`,
+  fragmentShader: `
+    uniform vec3 uDeep, uHorizon, uTop, uGlow, uSpiritCol, uSpirit; uniform float uMid, uPulse;
+    varying vec3 vW; varying float vRip; varying vec3 vN;
+    void main(){
+      vec3 n = normalize(vN);
+      vec3 v = normalize(cameraPosition - vW);
+      float fres = pow(1. - abs(dot(n, v)), 4.);
+      vec3 c = mix(uDeep, mix(uHorizon, uTop, 0.4), fres * 0.7);
+      // shimmering moon / sky path
+      float sparkle = pow(max(dot(reflect(-v, n), normalize(vec3(-0.35, 0.22, -1.))), 0.), 500.);
+      c += vec3(1., .95, .88) * sparkle * (0.35 + uMid * 0.4);
+      c += uGlow * vRip * (0.18 + uPulse * 0.1);
+      float sd = distance(vW.xz, uSpirit.xz);
+      c += uSpiritCol * exp(-sd * 0.35) * 0.12;
+      float dist = length(cameraPosition.xz - vW.xz);
+      c = mix(c, uHorizon * 0.8, smoothstep(60., 185., dist));
+      gl_FragColor = vec4(c, 1.);
+    }`,
+});
+const waterGeo = new THREE.PlaneGeometry(WATER, WATER, WSEG, WSEG); waterGeo.rotateX(-Math.PI / 2);
+const water = new THREE.Mesh(waterGeo, waterMat); scene.add(water);
+function waveHeight(x, z, t) {
+  return (Math.sin(x * .13 + t * .5) * .35 + Math.sin(z * .09 - t * .38) * .45 + Math.sin((x + z) * .27 + t * .9) * .1) * (0.75 + A.bass * 0.5);
+}
+
+// --- glow sprite texture ---
+const glowTex = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d'), gr = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.18, 'rgba(255,255,255,.7)');
+  gr.addColorStop(0.45, 'rgba(255,255,255,.16)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = gr; g.fillRect(0, 0, 128, 128);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+})();
+const glowMat = color => new THREE.SpriteMaterial({ map: glowTex, color, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
+
+// --- the spirit you guide ---
+const spirit = new THREE.Group(); scene.add(spirit);
+const halo = new THREE.Sprite(glowMat(pal.spirit)); halo.scale.setScalar(3); spirit.add(halo);
+const core = new THREE.Sprite(glowMat(0xffffff)); core.scale.setScalar(1.1); spirit.add(core);
+spirit.position.set(0, 1.8, 0);
+
+const TRAIL = 36, tPos = new Float32Array(TRAIL * 3), tLife = new Float32Array(TRAIL);
+for (let i = 0; i < TRAIL; i++) { tLife[i] = 1 - i / TRAIL; tPos.set([0, 1.8, i * 0.2], i * 3); }
+const trailGeo = new THREE.BufferGeometry();
+trailGeo.setAttribute('position', new THREE.BufferAttribute(tPos, 3));
+trailGeo.setAttribute('aLife', new THREE.BufferAttribute(tLife, 1));
+const trailMat = new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  uniforms: { uColor: { value: pal.spirit }, uRatio: { value: renderer.getPixelRatio() } },
+  vertexShader: `attribute float aLife; uniform float uRatio; varying float vL;
+    void main(){ vL = aLife; vec4 mv = modelViewMatrix * vec4(position, 1.); gl_PointSize = min(aLife * 14. * uRatio * (10. / -mv.z), 28. * uRatio); gl_Position = projectionMatrix * mv; }`,
+  fragmentShader: `uniform vec3 uColor; varying float vL; void main(){ float d = length(gl_PointCoord - .5); float a = smoothstep(.5, 0., d) * vL * vL * .35; gl_FragColor = vec4(uColor * a, a); }`,
+});
+const trail = new THREE.Points(trailGeo, trailMat); trail.frustumCulled = false; scene.add(trail);
+
+// --- pools: fireflies to gather, lanterns that bloom on the water ---
+function pool(make) { const items = []; return { items, get() { let o = items.find(x => !x.on); if (!o) { o = make(); items.push(o); } o.on = true; o.s.visible = true; return o; } }; }
+const motes = pool(() => { const s = new THREE.Sprite(glowMat(0xffe7a8)); scene.add(s); return { s, on: false, ph: 0, y: 0, pull: 0 }; });
+const lanterns = pool(() => { const s = new THREE.Sprite(glowMat(0xffffff)); scene.add(s); return { s, on: false, born: 0, hue: 0, size: 1 }; });
+const sparks = pool(() => { const s = new THREE.Sprite(glowMat(0xfff2d0)); scene.add(s); return { s, on: false, v: new THREE.Vector3(), life: 0 }; });
+const off = o => { o.on = false; o.s.visible = false; };
+
+function spawnMote() {
+  if (motes.items.filter(m => m.on).length > 36) return;
+  const m = motes.get(); m.ph = rand(0, 6.28); m.y = rand(1.2, 3.4); m.pull = 0;
+  m.s.position.set(spirit.position.x + rand(-7, 7), m.y, spirit.position.z - rand(55, 95));
+  m.s.scale.setScalar(rand(0.9, 1.4));
+}
+function spawnLantern(strength = 1) {
+  const l = lanterns.get(); l.born = U.uTime.value; l.size = rand(1.6, 2.6) * (0.8 + strength * 0.2);
+  l.s.material.color.copy(pal.glow).offsetHSL(rand(-0.06, 0.06), 0, 0);
+  l.s.position.set(spirit.position.x + rand(-22, 22), 0.4, spirit.position.z - rand(45, 110));
+  addRipple(l.s.position.x, l.s.position.z, 0.8 + strength * 0.25);
+}
+function burst(pos) {
+  for (let i = 0; i < 10; i++) {
+    const p = sparks.get(); p.life = 1; p.s.position.copy(pos);
+    p.v.set(rand(-1, 1), rand(0.2, 1.4), rand(-1, 1)).multiplyScalar(2.2); p.s.scale.setScalar(0.35);
+  }
+}
+
+/* =========================================================
+   STATE + LOOP
+   ========================================================= */
+const S = { mode: 'menu', gathered: 0, speed: 5, tx: 0, ty: 1.8, pointer: null, keys: {}, pulse: 0, swell: 0, sinceMote: 0, sinceLantern: 0, src: null, idle: 0 };
+const camPos = new THREE.Vector3(0, 4.2, 11), camLook = new THREE.Vector3();
+
+function whisper(text) {
+  const w = $('whisper'); w.textContent = text;
+  w.animate([{ opacity: 0, transform: 'translateY(8px)' }, { opacity: .9, transform: 'none', offset: .3 }, { opacity: .9, offset: .7 }, { opacity: 0, transform: 'translateY(-6px)' }],
+    { duration: 5200, easing: 'ease-in-out' });
+}
+
+function update(dt, now) {
+  analyze(now, dt);
+  U.uTime.value = now;
+  U.uMid.value = A.mid; U.uBass.value = A.bass; U.uTreble.value = A.treble;
+  const drifting = S.mode === 'drift';
+
+  // colour mood: drift through palettes slowly, swells move us on
+  palTimer += dt;
+  if (F.swell || palTimer > 80) { nextPalette(); if (drifting) whisper(PALETTES[palIndex].name); S.swell = 1; }
+  for (const k in pal) pal[k].lerp(palTarget[k], 1 - Math.exp(-dt * 0.18));
+
+  if (F.beat) { S.pulse = Math.min(1, S.pulse + 0.5 * F.strength); $('dot').animate([{ opacity: .9 }, { opacity: .25 }], { duration: 600, easing: 'ease-out' }); }
+  S.pulse = damp(S.pulse, 0, 2.5, dt);
+  S.swell = damp(S.swell, 0, 0.5, dt);
+  U.uPulse.value = S.pulse;
+
+  // movement: always gently forward, steer with mouse/keys
+  S.speed = damp(S.speed, 4.5 + A.level * 9 + S.swell * 3, 0.8, dt);
+  const sp = spirit.position;
+  sp.z -= S.speed * dt;
+  if (drifting) {
+    const kx = (S.keys.right ? 1 : 0) - (S.keys.left ? 1 : 0), ky = (S.keys.up ? 1 : 0) - (S.keys.down ? 1 : 0);
+    if (kx || ky) { S.pointer = null; S.tx += kx * dt * 9; S.ty = clamp(S.ty + ky * dt * 3, 1.0, 4.2); }
+    else if (S.pointer) { S.tx = camPos.x + S.pointer.x * 13; S.ty = clamp(2.4 - S.pointer.y * 1.6, 1.0, 4.2); }
+  } else { S.tx = Math.sin(now * 0.13) * 6; S.ty = 2; }
+  sp.x = damp(sp.x, S.tx, 2.2, dt);
+  sp.y = damp(sp.y, S.ty + Math.sin(now * 1.3) * 0.15, 2, dt);
+  const breath = 1 + S.pulse * 0.25 + A.bass * 0.2;
+  halo.scale.setScalar(3 * breath); core.scale.setScalar(0.7 + S.pulse * 0.1);
+  waterMat.uniforms.uSpirit.value.copy(sp);
+
+  // trail
+  tPos.copyWithin(3, 0, (TRAIL - 1) * 3);
+  tPos[0] = sp.x + rand(-.05, .05); tPos[1] = sp.y + rand(-.05, .05); tPos[2] = sp.z + 0.3;
+  trailGeo.attributes.position.needsUpdate = true;
+
+  // camera floats behind, softly leaning into turns
+  camPos.x = damp(camPos.x, sp.x * 0.75, 1.2, dt);
+  camPos.y = damp(camPos.y, 3.6 + sp.y * 0.45, 1.2, dt);
+  camPos.z = sp.z + 11;
+  camera.position.copy(camPos);
+  camLook.set(sp.x * 0.9, sp.y * 0.6 + 1.2, sp.z - 18);
+  camera.lookAt(camLook);
+  camera.rotation.z += (camPos.x - sp.x) * 0.012;
+  skyGroup.position.copy(camera.position);
+  water.position.set(Math.round(camPos.x / WSTEP) * WSTEP, 0, Math.round((camPos.z - 120) / WSTEP) * WSTEP);
+
+  // the music grows the world
+  S.sinceMote += dt; S.sinceLantern += dt;
+  if (F.hat && Math.random() < 0.45) { spawnMote(); S.sinceMote = 0; }
+  if (S.sinceMote > 1.6) { spawnMote(); S.sinceMote = 0; }
+  if (F.beat) {
+    if (Math.random() < 0.7) { spawnLantern(F.strength); S.sinceLantern = 0; }
+    if (F.strength > 1.8) addRipple(sp.x, sp.z - 2, 0.6);
+  }
+  if (S.sinceLantern > 3) { spawnLantern(1); S.sinceLantern = 0; }
+  if (F.swell) for (let i = 0; i < 6; i++) spawnLantern(2);
+
+  for (const m of motes.items) {
+    if (!m.on) continue;
+    const p = m.s.position;
+    p.y = m.y + Math.sin(now * 1.4 + m.ph) * 0.35;
+    p.x += Math.sin(now * 0.7 + m.ph) * dt * 0.4;
+    const d = p.distanceTo(sp);
+    if (drifting && d < 7) { m.pull = Math.min(1, m.pull + dt * 1.5); p.lerp(sp, m.pull * dt * 4); }
+    m.s.material.opacity = 0.5 + 0.25 * Math.sin(now * 3 + m.ph) + S.pulse * 0.2;
+    if (drifting && d < 1.1) {
+      off(m); burst(p); S.gathered++; addConstellationStar();
+      $('count').textContent = S.gathered;
+      if (S.gathered % 25 === 0) whisper(['breathe in', 'let it carry you', 'nowhere to be', 'stay a while', 'soft and slow'][(S.gathered / 25 - 1) % 5]);
+      continue;
+    }
+    if (p.z > camPos.z + 4) off(m);
+  }
+  for (const l of lanterns.items) {
+    if (!l.on) continue;
+    const age = now - l.born, p = l.s.position;
+    p.y = 0.35 + waveHeight(p.x, p.z, now) + Math.sin(now * 2 + l.born) * 0.05;
+    const grow = Math.min(1, age / 1.8);
+    l.s.scale.setScalar(l.size * (0.2 + 0.8 * grow) * (1 + S.pulse * 0.15));
+    l.s.material.opacity = Math.min(1, age) * 0.6;
+    if (p.z > camPos.z + 6 || age > 60) off(l);
+  }
+  for (const s of sparks.items) {
+    if (!s.on) continue;
+    s.life -= dt * 0.9; s.v.y -= dt * 0.6;
+    s.s.position.addScaledVector(s.v, dt); s.s.material.opacity = Math.max(0, s.life);
+    if (s.life <= 0) off(s);
+  }
+
+  // gentle post
+  bloom.strength = 0.4 + A.mid * 0.3 + S.pulse * 0.12 + S.swell * 0.2;
+  camera.fov = damp(camera.fov, 58 + S.swell * 4 + A.level * 3, 1, dt); camera.updateProjectionMatrix();
+  scene.background = null;
+
+  // hide the hint after a while; tuck the interface away when idle
+  if (drifting) { S.idle += dt; if (S.idle > 8) $('hint').style.opacity = 0; }
+}
+
+/* =========================================================
+   INPUT
+   ========================================================= */
+document.querySelectorAll('button[data-src]').forEach(b => b.addEventListener('click', async () => {
+  $('err').textContent = '';
+  try {
+    await startSource(b.dataset.src);
+    S.src = b.dataset.src;
+    $('srcLabel').textContent = { tab: 'listening to your tab', mic: 'listening to the room', file: 'listening to your song', demo: 'ambient demo' }[S.src];
+    S.mode = 'drift'; $('overlay').classList.add('hidden'); $('hud').classList.remove('off');
+    setTimeout(() => whisper('drift'), 900);
+  } catch (e) {
+    $('err').textContent = e.name === 'NotAllowedError' ? 'Permission was declined. Try again and allow it in the browser prompt.' : (e.message || String(e));
+  }
+}));
+
+const KEYMAP = { arrowleft: 'left', a: 'left', arrowright: 'right', d: 'right', arrowup: 'up', w: 'up', arrowdown: 'down', s: 'down' };
+addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if (KEYMAP[k]) { S.keys[KEYMAP[k]] = true; e.preventDefault(); }
+  if (e.repeat) return;
+  if (k === 'h') $('hud').classList.toggle('off');
+  if (k === 'p' && S.mode !== 'menu') {
+    S.mode = S.mode === 'rest' ? 'drift' : 'rest';
+    if (A.ctx) S.mode === 'rest' ? A.el?.pause() : A.el?.play();
+    if (S.mode === 'rest') whisper('resting');
+  }
+});
+addEventListener('keyup', e => { const k = KEYMAP[e.key.toLowerCase()]; if (k) S.keys[k] = false; });
+addEventListener('pointermove', e => { S.pointer = { x: e.clientX / innerWidth * 2 - 1, y: e.clientY / innerHeight * 2 - 1 }; });
+addEventListener('resize', () => {
+  renderer.setSize(innerWidth, innerHeight); composer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+});
+
+window.__drift = { A, S, F, spirit, camera }; // for poking around in the console
+
+let last = performance.now();
+renderer.setAnimationLoop(() => {
+  const nowMs = performance.now();
+  const dt = Math.min(0.05, (nowMs - last) / 1000); last = nowMs;
+  if (S.mode !== 'rest') update(dt, nowMs / 1000);
+  composer.render();
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+# macOS
+.DS_Store
+
+# builds
+WayfarerMac/.build/
+WayfarerMac/build/
+*.xcodeproj/xcuserdata/
+
+# raw downloads and Blender working files: large, and some licences don't allow re-uploading the original files
+WayfarerMac/SourceModels/
+*.blend
+*.blend1
+WayfarerMac/shots/

@@ -1,0 +1,2 @@
+Terrain textures from ambientCG.com (Grass004, Ground078, Rock058, Ground054, Snow010A, Rock029).
+Licensed CC0 1.0 Universal (public domain) — free for any use, no attribution required.
