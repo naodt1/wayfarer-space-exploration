@@ -11,3 +11,5 @@ WayfarerMac/SourceModels/
 *.blend
 *.blend1
 WayfarerMac/shots/
+WayfarerGodot/.godot/
+WayfarerGodot/shots/
