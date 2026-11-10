@@ -156,7 +156,10 @@ extension Game {
         let shipUp = simd_normalize(pos - P.pos)
         alt = simd_distance(pos, P.pos) - surfaceR(P, shipUp) - gearH
         airDensity = 1
-        sfx?.jet(w.jet)
+        if w.flying {
+            let fs = simd_length(w.vel + simd_normalize(w.pos - P.pos) * w.vUp)      // km/s
+            sfx?.flight(clampd(0.18 + fs / 0.4, 0, 1)); sfx?.jet(0)
+        } else { sfx?.flight(0); sfx?.jet(w.jet) }
         checkDiscovery()
     }
 
@@ -223,7 +226,8 @@ extension Game {
                 let hard = clampd((impact - 0.014) / 0.08, 0, 1)
                 w.flying = false; w.heroLand = 1.1 + hard * 0.5; w.vel = .zero
                 kick = max(kick, 0.6 + hard * 1.6); heroLandT = 0; heroLandPos = w.pos; heroLandK = 0.4 + hard * 0.6
-                sfx?.heavyLand(0.4 + hard * 0.6)
+                crackGround(P, at: w.pos, hard: 0.25 + 0.75 * hard)
+                sfx?.heroImpact(0.4 + hard * 0.6)
                 say(hard > 0.6 ? "SUPERHERO LANDING" : "landed")
             } else if !w.onGround {
                 let hard = clampd(-w.vUp / 0.008, 0, 1); w.land = 0.35 + hard * 0.65; if w.vUp < -0.002 { sfx?.step(0.6 + hard, air: true) }

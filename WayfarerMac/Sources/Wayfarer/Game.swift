@@ -66,6 +66,7 @@ final class Game {
     var jetPoints: [D3] = []
     var heroBoomT = 9.0, heroBoomPos = D3.zero, heroMachArmed = true, heroVapor = 0.0   // the robot breaking the sound barrier
     var heroLandT = 9.0, heroLandPos = D3.zero, heroLandK = 0.0   // the shockwave of a superhero landing
+    var cracks: [GroundCrack] = [], crackSerial = 0              // the ground split open by superhero landings (Cracks.swift)
     var parkedHover = false              // you stepped out of a ship that's still hovering
     var charSkin: [simd_float4x4] = []     // the rigged character's skin matrices (CharacterRig), and where it stands
     var charRoot = simd_double4x4(1), charIdleT = 0.0, charIdleK = 1.0
@@ -339,6 +340,7 @@ final class Game {
         tankerStep(dt)
         cargoStep(dt)
         dustT += dt; heroLandT += dt; heroBoomT += dt
+        ageCracks(dt)
         engineK = damp(engineK, fuel > 0 ? 1 : 0, fuel > 0 ? 3 : 1.5, dt)
         if mode == .walk { walkFrame(dt); return }
         let heldKeys = keys, heldMouse = mouse
@@ -381,6 +383,7 @@ final class Game {
         powerK = damp(powerK, power ? 1 : 0, power ? 1.8 : 1.1, dt)
         bounceT += dt
         sfx?.engine(throttle: mode == .landed ? 0 : (mode == .fly ? throttle : mode == .hover ? 0.4 + min(0.4, simd_length(hv) * 10) : 0.5), ab: abLevel, on: power && fuel > 0)
+        sfx?.flight(0); sfx?.jet(0)          // the robot's wind and jetpack stop once you're aboard
         // afterburner kick, sonic boom at Mach 1, vapour cone in the transonic zone
         kick *= exp(-dt * 2.2); burnFlash *= exp(-dt * 3.5); shockT += dt
         if mode == .fly && airDensity > 0.02 {

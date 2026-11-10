@@ -176,7 +176,9 @@ private let FACE_AXES: [(n: D3, r: D3, u: D3)] = [
 private struct Tier { let cell: Double; let range: Double; let minSize: Double; let maxSize: Double; let id: Int }
 private let TIERS = [Tier(cell: 0.010, range: 0.26, minSize: 0.3, maxSize: 1.4, id: 0),
                      Tier(cell: 0.045, range: 1.6, minSize: 1.0, maxSize: 7.0, id: 1),
-                     Tier(cell: 0.0022, range: GRASS_RANGE, minSize: 0.8, maxSize: 1.35, id: 2)]     // grass clumps
+                     Tier(cell: 0.0022, range: GRASS_RANGE, minSize: 0.8, maxSize: 1.35, id: 2),     // grass clumps
+                     Tier(cell: 0.028, range: TREE_RANGE, minSize: 0.85, maxSize: 1.6, id: 3),       // trees (Flora.swift)
+                     Tier(cell: 0.006, range: BUSH_RANGE, minSize: 0.75, maxSize: 1.35, id: 4)]      // bushes and flowers
 let GRASS_RANGE = 0.055
 let GRASS_KIND = 100          // instances with kind >= this are grass clumps (variant = kind - GRASS_KIND)
 let GRASS_VARIANTS = 4
@@ -228,6 +230,9 @@ final class RockField {
     let mean: SIMD3<Float>
     var avoid: [D3] = []                 // keep clear of discovery sites
     var grassMean = SIMD3<Float>(0.12, 0.16, 0.05)     // average colour of the grass ground texture
+    var avoidWide: [D3] = []             // keep trees off depot pads and out of the town
+    var avoidWorld: ObjectIdentifier?
+    var flora: (green: [Int], autumn: [Int], dry: [Int], bush: [Int], flower: [Int]) = ([], [], [], [], [])
     var idle: Bool { lock.lock(); defer { lock.unlock() }; return pendingKeys.isEmpty && done.isEmpty }
 
     init(kindCount: Int, mean: SIMD3<Float>) { self.kindCount = kindCount; self.mean = mean }
@@ -294,7 +299,7 @@ final class RockField {
         for w in todo { pendingKeys.insert(w.0) }
         lock.unlock()
         if todo.isEmpty { return }
-        let avoid = self.avoid, kinds = kindCount, mean = self.mean, grassMean = self.grassMean
+        let avoid = self.avoid, kinds = kindCount, mean = self.mean, grassMean = self.grassMean, avoidWide = self.avoidWide, flora = self.flora
         // nearest cells first
         let sorted = todo.sorted { a, b in
             let pa = cubeDir(a.1, (Double(a.2) + 0.5) * a.4.cell * uvPerKm - 1, (Double(a.3) + 0.5) * a.4.cell * uvPerKm - 1)
@@ -307,7 +312,8 @@ final class RockField {
                 var out: [(Int, [RockInstance])] = []
                 for (key, f, i, j, t) in part {
                     out.append((key, t.id == 2 ? RockField.grass(W, face: f, i: i, j: j, tier: t, uvPerKm: uvPerKm, avoid: avoid, mean: grassMean)
-                                                : RockField.generate(W, face: f, i: i, j: j, tier: t, uvPerKm: uvPerKm, avoid: avoid, kinds: kinds, mean: mean)))
+                                : t.id >= 3 ? RockField.plants(W, face: f, i: i, j: j, tier: t, uvPerKm: uvPerKm, avoid: avoid + avoidWide, flora: flora)
+                                : RockField.generate(W, face: f, i: i, j: j, tier: t, uvPerKm: uvPerKm, avoid: avoid, kinds: kinds, mean: mean)))
                 }
                 guard let self else { return }
                 self.lock.lock()
@@ -316,6 +322,67 @@ final class RockField {
                 self.lock.unlock()
             }
         }
+    }
+
+    /// trees (tier 3) and bushes and flowers (tier 4), on the living worlds: dense in forest, scattered over grassland,
+    /// autumn colours and bare trees where the land is dry; none on sand, rock, snow or steep ground
+    private static func plants(_ W: World, face f: Int, i: Int, j: Int, tier t: Tier, uvPerKm: Double, avoid: [D3],
+                               flora: (green: [Int], autumn: [Int], dry: [Int], bush: [Int], flower: [Int])) -> [RockInstance] {
+        var out: [RockInstance] = []
+        if !W.sea { return out }
+        let trees = t.id == 3
+        if trees && flora.green.isEmpty || !trees && flora.bush.isEmpty { return out }
+        let cu = t.cell * uvPerKm
+        let rnd = Mulberry(UInt32(truncatingIfNeeded: (i &* 2654435761) ^ (j &* 40503) ^ (f &* 97531) ^ (t.id &* 668265263) ^ 0x7f4a7c15))
+        for _ in 0..<(trees ? 4 : 3) {
+            let u = (Double(i) + rnd.next()) * cu - 1, v = (Double(j) + rnd.next()) * cu - 1
+            let pick = rnd.next(), sizeR = rnd.next(), yaw = rnd.next() * .pi * 2, which = rnd.next(), shade = Float(rnd.next()), lean = rnd.next()
+            let d = cubeDir(f, u, v)
+            let e = W.height(d.x, d.y, d.z, 16, nil)
+            if e < 0.006 { continue }                       // not on beaches or underwater
+            // slope from two nearby samples
+            var a = simd_cross(d, D3(0, 1, 0)); if simd_length(a) < 1e-3 { a = simd_cross(d, D3(1, 0, 0)) }
+            a = simd_normalize(a); let b = simd_cross(d, a)
+            let eps = 0.004 / W.R
+            let ra = W.groundRadius(simd_normalize(d + a * eps)), rb = W.groundRadius(simd_normalize(d + b * eps))
+            let r0 = W.R + e
+            let pa = simd_normalize(d + a * eps) * ra, pb = simd_normalize(d + b * eps) * rb, p0 = d * r0
+            var n = simd_normalize(simd_cross(pa - p0, pb - p0)); if simd_dot(n, d) < 0 { n = -n }
+            let slope = 1 - simd_dot(n, d)
+            if slope > 0.12 { continue }
+            let m = W.materialFn(d.x, d.y, d.z, e, slope)
+            let tot = max(1e-4, m[0] + m[1] + m[2] + m[3] + m[4] + m[5])
+            let grass = m[0] / tot, forest = m[1] / tot
+            // how green the land really is here (the dry belts are brown even where the layer says "forest")
+            let gc = W.colorFn(d.x, d.y, d.z, e, slope)
+            let greenness = Float(ss(0.9, 1.35, gc.y / max(gc.x, 1e-4)))
+            let dry = 1 - greenness
+            // groves and clearings: slow, warped stripes of density a few hundred metres across
+            let g1 = sin(d.x * 7300 + sin(d.z * 5100) * 2.1) * sin(d.y * 6100 + sin(d.x * 4300) * 1.7)
+            let g2 = sin(d.z * 19000 + d.y * 11000) * 0.35
+            let grove = Float(ss(-0.35, 0.55, g1 + g2))
+            let density = trees ? (forest * 0.95 + grass * 0.08) * (0.15 + 0.85 * grove) * (0.02 + 0.98 * greenness * greenness)
+                                : (grass * 0.55 + forest * 0.3) * 0.7 * (0.3 + 0.7 * greenness)
+            if Float(pick) > density { continue }
+            let pos = W.pos + d * r0
+            if avoid.contains(where: { simd_distance($0, pos) < (trees ? 0.09 : 0.03) }) { continue }
+            func one(_ a: [Int]) -> Int? { a.isEmpty ? nil : a[min(a.count - 1, Int(rnd.next() * Double(a.count)))] }
+            let model: Int
+            if trees {
+                if dry > 0.45 { model = (which < 0.3 ? one(flora.dry) : one(flora.autumn)) ?? one(flora.green)! }
+                else { model = (which < 0.82 ? one(flora.green) : one(flora.autumn)) ?? one(flora.green)! }
+            } else {
+                model = (which < 0.62 ? one(flora.bush) : one(flora.flower)) ?? one(flora.bush)!
+            }
+            // trees grow straight up; small plants follow the ground a little
+            let up = trees ? d : simd_normalize(simd_mix(d, n, D3(repeating: 0.5)))
+            let q = simd_quatd(from: D3(0, 1, 0), to: up) * simd_quatd(angle: yaw, axis: D3(0, 1, 0))
+                  * simd_quatd(angle: (lean - 0.5) * (trees ? 0.06 : 0.2), axis: D3(1, 0, 0))
+            let tint = SIMD3<Float>(repeating: 0.82 + shade * 0.3) * SIMD3(1, 1.0 + (shade - 0.5) * 0.08, 1)
+            out.append(RockInstance(pos: pos - d * 0.0002, q: simd_quatf(ix: Float(q.imag.x), iy: Float(q.imag.y), iz: Float(q.imag.z), r: Float(q.real)),
+                                    size: Float(t.minSize + (t.maxSize - t.minSize) * sizeR), kind: FLORA_KIND + model, tint: tint))
+        }
+        return out
     }
 
     private static func grass(_ W: World, face f: Int, i: Int, j: Int, tier t: Tier, uvPerKm: Double, avoid: [D3], mean: SIMD3<Float>) -> [RockInstance] {

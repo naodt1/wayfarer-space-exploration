@@ -168,10 +168,18 @@ Originals live in SourceModels/new. Tools/blender/batch_props.sh prepares each (
 
 ## Player character and car
 
-On foot you are the orange robot ("Sci-fi O.B. Robot Unit TH-ICC02" by Jungle Jim, CC BY 4.0), skinned on the GPU. Tools/blender/prep_skinned.py exports its 84-joint skeleton, skin weights and its idle animation (Assets/Characters); CharacterRig.swift plays the idle when you stand still and drives the legs, arms, spine and head with code for walking, running, jumping and the jetpack.
+On foot you are the Bot Blast R-325 ("FREE CHARACTER BOT BLAST R-325" by Oscar Creativo, CC BY 4.0, https://sketchfab.com/3d-models/free-character-bot-blast-r-325-by-oscar-creativo-7c3843d203aa4044ae38f7a74645b345), skinned on the GPU. It replaced the orange robot ("Sci-fi O.B. Robot Unit TH-ICC02" by Jungle Jim). Tools/blender/prep_skinned.py exports its 142-joint skeleton, skin weights and its idle animation (Assets/Characters); CharacterRig.swift plays the idle when you stand still and drives the legs, arms, spine and head with code for walking, running, jumping and the jetpack.
 
 The rover is the cyberpunk cargo truck (Jungle Jim, CC BY 4.0), split by Tools/blender/prep_truck.py into a body and a wheel: the eight wheels spin, the front axle steers (the rear a little), each wheel rides its own suspension over the ground, and the body leans in turns and dips under throttle and braking. Headlights, brake lights and a dust trail. Top speed 160 km/h, 270 with Shift.
 
 ## Atlas: the UNSA cruiser hull
 
 The Atlas is now the UNSA cruiser, scaled to 1.3 km (prep_prop.py length=1300 rotz=180, baked at 4096). The decks are fitted inside it: the lounge is 160 m wide with windows on both flanks, the JJ corridor runs aft to the reactor hall, the new hallway (five 19 m segments, end walls removed) continues to a lobby where a lift rises straight up to the bridge in the command tower. The cargo bay moved aft to the deep part of the keel (ATLAS_BAY_DZ). Constants: ATLAS_EYE, ATLAS_BAY_DZ, ATLAS_DOOR_Y, ATLAS_HALL in Interior.swift.
+
+### Trees, bushes and flowers
+
+"Low poly trees, flowers and grass" by Márcio Meireles (CC BY 4.0, https://sketchfab.com/3d-models/low-poly-trees-flowers-and-grass-442904f26b87407d98871b50b49c4169), exported by Tools/blender/prep_flora.py into Assets/Models/flora. Flora.swift loads them; RockField (Rocks.swift) scatters trees out to 1.1 km in forest and grassland, with groves and clearings, autumn and bare trees on dry land, none on beaches, rock, snow, steep ground, depot pads or the town; bushes and flowers out to 75 m. They sway in the wind, the sun shines through the leaves, and nearby trees cast leaf-shaped shadows.
+
+### Superhero landings
+
+Slamming into the ground leaves cracks (Cracks.swift): a scorched crater with jagged fissures and side branches, glowing molten orange for a second or two, cooling to dark lines and fading after about 20 s. The impact sound is a sharp crack, a body blow, a sub-bass boom, the ground splitting and debris raining down (Audio.heroImpact). Flying as the robot now sounds like air rushing past (Audio.flight), not a hiss.

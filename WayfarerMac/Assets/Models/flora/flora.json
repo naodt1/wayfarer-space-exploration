@@ -1,0 +1,206 @@
+[
+ {
+  "name": "daffodil-flower-01",
+  "height": 0.767,
+  "parts": [
+   {
+    "bin": "daffodil-flower-01_0.bin",
+    "png": "daffodil-flower-01_0.png",
+    "cutout": true
+   },
+   {
+    "bin": "daffodil-flower-01_1.bin",
+    "png": "daffodil-flower-01_1.png",
+    "cutout": true
+   }
+  ]
+ },
+ {
+  "name": "daffodil-flower-02",
+  "height": 0.737,
+  "parts": [
+   {
+    "bin": "daffodil-flower-02_0.bin",
+    "png": "daffodil-flower-02_0.png",
+    "cutout": true
+   },
+   {
+    "bin": "daffodil-flower-02_1.bin",
+    "png": "daffodil-flower-02_1.png",
+    "cutout": true
+   }
+  ]
+ },
+ {
+  "name": "daisy-flower-diffuse-01",
+  "height": 0.817,
+  "parts": [
+   {
+    "bin": "daisy-flower-diffuse-01_0.bin",
+    "png": "daisy-flower-diffuse-01_0.png",
+    "cutout": true
+   },
+   {
+    "bin": "daisy-flower-diffuse-01_1.bin",
+    "png": "daisy-flower-diffuse-01_1.png",
+    "cutout": true
+   }
+  ]
+ },
+ {
+  "name": "daisy-flower-diffuse-02",
+  "height": 0.741,
+  "parts": [
+   {
+    "bin": "daisy-flower-diffuse-02_0.bin",
+    "png": "daisy-flower-diffuse-02_0.png",
+    "cutout": true
+   },
+   {
+    "bin": "daisy-flower-diffuse-02_1.bin",
+    "png": "daisy-flower-diffuse-02_1.png",
+    "cutout": true
+   }
+  ]
+ },
+ {
+  "name": "daisy-flower-diffuse-03",
+  "height": 0.484,
+  "parts": [
+   {
+    "bin": "daisy-flower-diffuse-03_0.bin",
+    "png": "daisy-flower-diffuse-03_0.png",
+    "cutout": true
+   },
+   {
+    "bin": "daisy-flower-diffuse-03_1.bin",
+    "png": "daisy-flower-diffuse-03_1.png",
+    "cutout": true
+   }
+  ]
+ },
+ {
+  "name": "grass-bushes-01",
+  "height": 0.964,
+  "parts": [
+   {
+    "bin": "grass-bushes-01_0.bin",
+    "png": "grass-bushes-01_0.png",
+    "cutout": true
+   }
+  ]
+ },
+ {
+  "name": "grass-bushes-02",
+  "height": 0.713,
+  "parts": [
+   {
+    "bin": "grass-bushes-02_0.bin",
+    "png": "grass-bushes-02_0.png",
+    "cutout": true
+   }
+  ]
+ },
+ {
+  "name": "plant-ground-brown-02",
+  "height": 1.018,
+  "parts": [
+   {
+    "bin": "plant-ground-brown-02_0.bin",
+    "png": "plant-ground-brown-02_0.png",
+    "cutout": true
+   }
+  ]
+ },
+ {
+  "name": "plant-ground-green-01",
+  "height": 1.018,
+  "parts": [
+   {
+    "bin": "plant-ground-green-01_0.bin",
+    "png": "plant-ground-green-01_0.png",
+    "cutout": true
+   }
+  ]
+ },
+ {
+  "name": "tree-stylized-01",
+  "height": 7.912,
+  "parts": [
+   {
+    "bin": "tree-stylized-01_0.bin",
+    "png": "tree-stylized-01_0.png",
+    "cutout": true
+   },
+   {
+    "bin": "tree-stylized-01_1.bin",
+    "png": "tree-stylized-01_1.png",
+    "cutout": false
+   }
+  ]
+ },
+ {
+  "name": "tree-stylized-02-dry",
+  "height": 8.689,
+  "parts": [
+   {
+    "bin": "tree-stylized-02-dry_0.bin",
+    "png": "tree-stylized-02-dry_0.png",
+    "cutout": false
+   },
+   {
+    "bin": "tree-stylized-02-dry_1.bin",
+    "png": "tree-stylized-02-dry_1.png",
+    "cutout": true
+   }
+  ]
+ },
+ {
+  "name": "tree-stylized-03-autumn-yellow",
+  "height": 7.473,
+  "parts": [
+   {
+    "bin": "tree-stylized-03-autumn-yellow_0.bin",
+    "png": "tree-stylized-03-autumn-yellow_0.png",
+    "cutout": true
+   },
+   {
+    "bin": "tree-stylized-03-autumn-yellow_1.bin",
+    "png": "tree-stylized-03-autumn-yellow_1.png",
+    "cutout": false
+   }
+  ]
+ },
+ {
+  "name": "tree-stylized-04-green",
+  "height": 8.273,
+  "parts": [
+   {
+    "bin": "tree-stylized-04-green_0.bin",
+    "png": "tree-stylized-04-green_0.png",
+    "cutout": false
+   },
+   {
+    "bin": "tree-stylized-04-green_1.bin",
+    "png": "tree-stylized-04-green_1.png",
+    "cutout": true
+   }
+  ]
+ },
+ {
+  "name": "tree-stylized-05-autumn-brown",
+  "height": 8.111,
+  "parts": [
+   {
+    "bin": "tree-stylized-05-autumn-brown_0.bin",
+    "png": "tree-stylized-05-autumn-brown_0.png",
+    "cutout": true
+   },
+   {
+    "bin": "tree-stylized-05-autumn-brown_1.bin",
+    "png": "tree-stylized-05-autumn-brown_1.png",
+    "cutout": false
+   }
+  ]
+ }
+]

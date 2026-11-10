@@ -13,7 +13,10 @@ final class Audio: @unchecked Sendable {
 
     // targets written from the main thread, smoothed on the audio thread
     private var tHum: Float = 0, tFreq: Float = 40, tCut: Float = 200, tRoar: Float = 0, tRoarF: Float = 700, tMaster: Float = 0.5, tJet: Float = 0
-    private var jetLvl: Float = 0, bpJet = Biquad()
+    private var jetLvl: Float = 0, bpJet = Biquad(), lpThrust = Biquad()
+    // superhero flight: air rushing past (a deep roar that opens up with speed, gusting, a faint whistle when fast)
+    private var tWind: Float = 0, tWindF: Float = 300, windLvl: Float = 0, windF: Float = 300
+    private var brown3 = 0.0, flutT = 0.0, gust = 0.0, lpWind = Biquad(), lpWind2 = Biquad(), bpWhistle = Biquad()
     private var hum: Float = 0, freq: Float = 40, cut: Float = 200, roar: Float = 0, roarF: Float = 700, master: Float = 0.5
     private var p1 = 0.0, p2 = 0.0, p3 = 0.0, brown = 0.0, brown2 = 0.0
     private var lpHum = Biquad(), lpRumble = Biquad(), bpRoar = Biquad(), lpDeep = Biquad()
@@ -47,7 +50,7 @@ final class Audio: @unchecked Sendable {
         let out = engine.outputNode.inputFormat(forBus: 0)
         sr = out.sampleRate > 0 ? out.sampleRate : 48000
         let fmt = AVAudioFormat(standardFormatWithSampleRate: sr, channels: 2)!
-        bpJet.set(1, 1800, 0.7, sr); lpRumble.set(0, 400, 0.7, sr); lpDeep.set(0, 160, 0.7, sr); bpRoar.set(1, 700, 0.5, sr); lpHum.set(0, 220, 0.9, sr); lpPad.set(0, 1100, 0.6, sr); lpPad2.set(0, 1100, 0.6, sr)
+        bpJet.set(1, 950, 0.6, sr); lpThrust.set(0, 320, 0.7, sr); lpWind.set(0, 300, 0.7, sr); lpWind2.set(0, 420, 0.7, sr); bpWhistle.set(1, 1100, 2.5, sr); lpRumble.set(0, 400, 0.7, sr); lpDeep.set(0, 160, 0.7, sr); bpRoar.set(1, 700, 0.5, sr); lpHum.set(0, 220, 0.9, sr); lpPad.set(0, 1100, 0.6, sr); lpPad2.set(0, 1100, 0.6, sr)
         for i in 0..<4 { padF[i] = Audio.hz(Audio.chords[0][i]); padT[i] = padF[i] }
         node = AVAudioSourceNode(format: fmt) { [unowned self] _, _, frameCount, abl -> OSStatus in
             self.render(Int(frameCount), UnsafeMutableAudioBufferListPointer(abl))
@@ -81,6 +84,8 @@ final class Audio: @unchecked Sendable {
         var v = Voice(); v.kind = 0; v.wave = 0; v.f0 = f0; v.f1 = f1; v.dur = dur; v.vol = vol; v.attack = 0.002; v.delay = delay; push(v)
     }
     func jet(_ level: Double) { tJet = Float(level) * 0.22 }
+    /// superhero flight: k 0 (still) … 1 (flat out). Wind, not a jet: no thin hiss.
+    func flight(_ k: Double) { tWind = Float(k); tWindF = Float(180 + 1100 * k) }
     /// footstep crunch; muffled where the air is thin
     func step(_ v: Double, air: Bool) {
         let a = air ? 1.0 : 0.45
@@ -115,6 +120,23 @@ final class Audio: @unchecked Sendable {
         boom(130, 60, 0.5, 0.4, 0.02)
         sweep(brown: true, filter: 0, 300, 40, 2.6 + k, 0.5 * k, 0.02, 0.1)
         blip(55, 1.4, 0.18 * k, 2, 0.35); blip(41, 1.8, 0.14 * k, 2, 0.6)        // the frame creaking under the load
+    }
+    /// a superhero landing: the sharp crack of impact, a body-blow thump, a sub-bass boom, the ground splitting and
+    /// rumbling, then grit and stones raining back down. k 0.4 (a firm landing) … 1 (from full speed)
+    func heroImpact(_ k: Double) {
+        sweep(brown: false, filter: 2, 9000, 1800, 0.06, 1.0, 0.0008)                 // crack of impact
+        sweep(brown: false, filter: 1, 2600, 500, 0.18, 0.45 * k, 0.001, 0.005)
+        boom(140, 38, 0.55, 1.0); boom(95, 30, 0.9, 0.8, 0.01)                          // the body blow
+        boom(52, 18, 2.4 + k, 0.9 * k, 0.03)                                            // sub boom you feel
+        sweep(brown: true, filter: 0, 500, 35, 3.0 + 1.5 * k, 0.75 * k, 0.01, 0.06)    // the ground rumbling out
+        for i in 0..<Int(5 + 7 * k) {                                                   // rock splitting: dry snaps
+            let d = 0.05 + Double(i) * 0.07 + Double.random(in: 0...0.05)
+            sweep(brown: false, filter: 1, Double.random(in: 1400...3800), Double.random(in: 500...900), 0.05, 0.22 * k, 0.001, d)
+        }
+        for _ in 0..<Int(10 + 16 * k) {                                                 // debris pattering down
+            let d = Double.random(in: 0.45...1.9)
+            sweep(brown: true, filter: 1, Double.random(in: 900...2400), 400, 0.04, Double.random(in: 0.05...0.14) * k, 0.001, d)
+        }
     }
     func thud() { boom(80, 32, 0.35, 0.7); sweep(brown: true, filter: 0, 600, 80, 0.4, 0.5, 0.005) }
     func lift() { sweep(brown: true, filter: 0, 120, 900, 2.5, 0.45, 0.6) }
@@ -199,8 +221,21 @@ final class Audio: @unchecked Sendable {
                     if Bool.random() { var e = v; e.delay = 0.38; e.vol *= 0.45; voices.append(e) }   // a soft echo
                 }
             }
+            brown3 = (brown3 + 0.02 * white) / 1.02
+            // jetpack: a full-bodied thrust (low rumble + a soft mid rush), not a hiss
             jetLvl += (tJet - jetLvl) * k * 4
-            if jetLvl > 0.0005 { s += bpJet.run(white) * Double(jetLvl) }
+            if jetLvl > 0.0005 { s += (lpThrust.run(brown3 * 3.5) * 1.8 + bpJet.run(white) * 0.35) * Double(jetLvl) }
+            // superhero flight wind
+            windLvl += (tWind - windLvl) * k * 2; windF += (tWindF - windF) * k
+            if windLvl > 0.0005 {
+                if counter % 64 == 1 { lpWind.set(0, Double(windF), 0.7, sr); lpWind2.set(0, Double(windF) * 1.5, 0.6, sr); bpWhistle.set(1, Double(windF) * 2.4 + 500, 2.5, sr) }
+                flutT += dt
+                gust = max(-1, min(1, gust * 0.99995 + Double.random(in: -1...1) * 0.0009))      // slow random gusts
+                let buffet = 0.74 + 0.16 * sin(flutT * 2 * .pi * 7.3) * sin(flutT * 2 * .pi * 1.6) + 0.2 * gust
+                let lw = Double(windLvl)
+                s += lpWind2.run(lpWind.run(brown3 * 3.5)) * 2.4 * lw * buffet          // the rushing roar
+                s += bpWhistle.run(white) * 0.035 * lw * lw * (0.8 + 0.4 * gust)        // air whistling past, only when fast
+            }
             let out = Float(tanh(s * 0.9)) * master
             L[i] = out; R[i] = out
         }

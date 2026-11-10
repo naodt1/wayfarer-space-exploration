@@ -107,8 +107,10 @@ func buildAtlas(device: MTLDevice) -> ShipModel {
             eye: eyeM, cockpit: nil,
             length: 2.0, size: 1.3, gearBottom: -legY + L + 4 * m,
             legs: legPts.map { ($0, $0.z < 0.2 ? 1.45 : -1.45) },
-            // five main nozzles across the stern (measured from the model)
-            engines: [(-28.9, 6.2), (-16.3, 6.6), (-1.9, 6.4), (11.9, 6.4), (25.3, 6.3)].map { (pos: D3($0.0, $0.1, 646) * m, r: 6.6 * m, pivot: -1) },
+            // six main engines: the recessed rectangular housings either side of the stern hangar, three a side
+            // (ray-cast from the model: rims at 570-581 m aft, centres 23 m below the deck line, 14 × 22 m openings)
+            engines: [(64.8, 579.0), (82.8, 575.0), (100.5, 568.0)].flatMap { e in [1.0, -1.0].map { sx in
+                (pos: D3(sx * e.0, -23.3, e.1) * m, r: 8.0 * m, pivot: -1) } },
             vtols: vt,
             navLights: [(D3(-150, -6, 360) * m, SIMD3(1, 0.23, 0.23), 0.05), (D3(150, -6, 360) * m, SIMD3(0.23, 1, 0.48), 0.05),
                         (D3(0, 92, 320) * m, SIMD3(1, 0.3, 0.3), 0.04)],

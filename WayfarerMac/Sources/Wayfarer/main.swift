@@ -726,6 +726,7 @@ func runSnapshot(args: [String]) {
     if let h = env["HEAT"].flatMap(Double.init) { game.heat = h }
     if env["BOOM"] != nil { game.vapor = 1; game.shockT = 0.35; game.kick = 0.6 }
     for _ in 0..<20 { game.update(dt); terrain.update(camPos: game.camPos) }
+    if let st = env["SETTLE"].flatMap(Double.init) { for _ in 0..<Int(st * 60) { game.update(1.0 / 60) } }   // dev: let things run longer
     if let cc = env["CHARCAM"]?.split(separator: ",").compactMap({ Double($0) }), cc.count >= 2, game.mode == .walk, let P = game.w.world {
         // dev: look at the character from the side (yaw around it, distance in metres)
         let up = simd_normalize(game.w.pos - P.pos), f = game.w.fwd, r = simd_normalize(simd_cross(f, up))

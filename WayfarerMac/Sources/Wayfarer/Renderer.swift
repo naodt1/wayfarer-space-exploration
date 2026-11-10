@@ -5,6 +5,7 @@ import simd
 struct FrameU { var view: float4x4; var proj: float4x4; var viewProj: float4x4; var invViewProj: float4x4; var sun: F4; var misc: F4; var camFwd: F4
     var shadow0 = matrix_identity_float4x4; var shadow1 = matrix_identity_float4x4; var shadowP = F4.zero; var shadowQ = F4.zero; var blob = F4.zero; var blob2 = F4.zero }
 let SHADOW_SIZE = 2048
+let MAX_BONES = 512          // skinning matrices per character (the Bot Blast rig has 142 joints)
 struct RockGPU { var posScale: F4; var quat: F4; var tint: F4 }
 struct RockU { var sun: F4; var sky: F4; var up: F4; var mean: F4 }
 struct RockSeg { let kind: Int; let lod: Int; let start: Int; let count: Int; let pass: Int }   // pass 0 main, 1 near shadow, 2 wide shadow
@@ -24,6 +25,12 @@ final class Renderer {
     private var pShadowTerrain, pShadowShip: MTLRenderPipelineState!
     private let shadowTex: MTLTexture
     private var pRock, pShadowRock, pGrass: MTLRenderPipelineState!
+    private var pCrack: MTLRenderPipelineState!
+    private var pTree, pShadowTree: MTLRenderPipelineState!
+    private var flora: FloraSet?
+    private var floraBufs: [MTLBuffer] = []
+    private var floraRing = 0
+    private var crackBufs: [Int: MTLBuffer] = [:]
     private let grassClumps: [RockLOD]
     let rocks: RockSet?
     let rockField: RockField?
@@ -105,11 +112,26 @@ final class Renderer {
         pShadowTerrain = try depthPipe("terrainV"); pShadowShip = try depthPipe("shipV"); pShadowRock = try depthPipe("rockV")
         pShadowSkin = try depthPipe("skinV"); pSkin = try pipe("skinV", "shipF")
         pRock = try pipe("rockV", "rockF"); pGrass = try pipe("grassV", "grassF")
+        pCrack = try pipe("crackV", "crackF", blend: "premul")
+        pTree = try pipe("treeV", "treeF")
+        do {
+            let d = MTLRenderPipelineDescriptor()
+            d.vertexFunction = lib.makeFunction(name: "treeV"); d.fragmentFunction = lib.makeFunction(name: "treeShadowF")
+            d.depthAttachmentPixelFormat = .depth32Float
+            pShadowTree = try device.makeRenderPipelineState(descriptor: d)
+        }
         rocks = loadRocks(device: device)
         rockField = rocks.map { RockField(kindCount: $0.kinds.count, mean: $0.mean) }
         grassClumps = buildGrassClumps(device: device)
         for _ in 0..<3 { glowBufs.append(device.makeBuffer(length: 2048 * MemoryLayout<GlowU>.stride, options: .storageModeShared)!) }
         for _ in 0..<3 { rockBufs.append(device.makeBuffer(length: ROCK_CAP * MemoryLayout<RockGPU>.stride, options: .storageModeShared)!) }
+        flora = loadFlora(device: device)
+        if let fl = flora, let f = rockField {
+            f.flora = (green: fl.indices { $0 == "tree-stylized-01" || $0.hasSuffix("-green") }, autumn: fl.indices { $0.contains("autumn") },
+                       dry: fl.indices { $0.hasSuffix("-dry") }, bush: fl.indices { $0.hasPrefix("grass-bushes") || $0.hasPrefix("plant-ground-green") },
+                       flower: fl.indices { $0.hasPrefix("daisy") || $0.hasPrefix("daffodil") })
+        }
+        for _ in 0..<3 { floraBufs.append(device.makeBuffer(length: FLORA_CAP * MemoryLayout<RockGPU>.stride, options: .storageModeShared)!) }
         let sdd = MTLTextureDescriptor()
         sdd.textureType = .type2DArray; sdd.pixelFormat = .depth32Float; sdd.width = SHADOW_SIZE; sdd.height = SHADOW_SIZE; sdd.arrayLength = 2
         sdd.usage = [.renderTarget, .shaderRead]; sdd.storageMode = .private
@@ -136,7 +158,7 @@ final class Renderer {
         tankerKit = buildTankerMesh(device: device)
         nozzleMesh = nozzleDisc(device: device)
         player = loadSkinnedModel(device: device, name: "player")
-        for _ in 0..<3 { boneBufs.append(device.makeBuffer(length: 128 * 64, options: .storageModeShared)!) }
+        for _ in 0..<3 { boneBufs.append(device.makeBuffer(length: MAX_BONES * 64, options: .storageModeShared)!) }
         // downloaded models (Props.swift) and the nebula sky
         func tiny(_ px: [UInt8], srgb: Bool) -> MTLTexture {
             let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: srgb ? .rgba8Unorm_srgb : .rgba8Unorm, width: 1, height: 1, mipmapped: false)
@@ -244,7 +266,7 @@ final class Renderer {
         return (toFloat(m), c)
     }
 
-    private func encodeShadows(_ cb: MTLCommandBuffer, _ F: inout FrameU, cam: D3, camWorld cw: World, camFwd: D3, shipModel: float4x4, legModels: [float4x4], nacelleModels: [float4x4], rockSegs: [RockSeg]) {
+    private func encodeShadows(_ cb: MTLCommandBuffer, _ F: inout FrameU, cam: D3, camWorld cw: World, camFwd: D3, shipModel: float4x4, legModels: [float4x4], nacelleModels: [float4x4], rockSegs: [RockSeg], floraSegs: [FloraSeg]) {
         let g = game
         let cup = simd_normalize(cam - cw.pos)
         let camAlt = simd_distance(cam, cw.pos) - cw.R
@@ -299,6 +321,9 @@ final class Renderer {
             if let rs = rocks {
                 se.setRenderPipelineState(pShadowRock)
                 for sg in rockSegs where sg.pass == slice + 1 { drawRocks(se, rs, sg) }
+            }
+            if floraSegs.contains(where: { $0.shadow }) {
+                se.setRenderPipelineState(pShadowTree); drawFlora(se, floraSegs, shadow: true)
             }
             se.setRenderPipelineState(pShadowShip)
             func draw(_ mesh: GPUMesh, _ model: float4x4) {
@@ -355,6 +380,14 @@ final class Renderer {
         guard let rs = rocks, let field = rockField else { return [] }
         let g = game
         field.avoid = g.sites.filter { $0.world === world }.map { $0.pos }
+        if field.avoidWide.isEmpty || field.avoidWorld != ObjectIdentifier(world) {
+            // keep trees off the depot pads and out of the town
+            var wide = g.depots.filter { $0.world === world }.map { $0.pos }
+            for p in g.props {
+                if case .surface(let wi, let dir, _) = p.anchor, wi < g.worlds.count, g.worlds[wi] === world { wide.append(world.pos + dir * world.R) }
+            }
+            field.avoidWide = wide.isEmpty ? [D3(1e9, 0, 0)] : wide; field.avoidWorld = ObjectIdentifier(world)
+        }
         field.update(cam: cam, world: world)
         let vis = field.visible
         if vis.isEmpty { return [] }
@@ -364,6 +397,7 @@ final class Renderer {
         let viewD = simd_double3x3(g.camQ).transpose
         var buckets = [[RockGPU]](repeating: [], count: kinds * 5 + GRASS_VARIANTS)
         for r in vis {
+            if r.kind >= FLORA_KIND { continue }          // trees and flowers: prepareFlora
             if r.kind >= GRASS_KIND {
                 let rel = r.pos - cam, dist = simd_length(rel)
                 if dist > GRASS_RANGE { continue }
@@ -409,6 +443,63 @@ final class Renderer {
             print("rocks visible \(vis.count) · lod0 \(c[0]) lod1 \(c[1]) lod2 \(c[2]) · shadow \(c[3]) / \(c[4]) · grass \(c[5])")
         }
         return segs
+    }
+
+    /// trees, bushes and flowers around the camera: one instance list per model (frustum culled), plus a list of the
+    /// trees close enough to cast shadows
+    private func prepareFlora(cam: D3, aspect: Double) -> [FloraSeg] {
+        guard let fl = flora, let field = rockField, !floraBufs.isEmpty else { return [] }
+        let g = game
+        let tanY = tan(g.fov * .pi / 360) * 1.1, tanX = tanY * aspect
+        let viewD = simd_double3x3(g.camQ).transpose
+        var buckets = [[RockGPU]](repeating: [], count: fl.models.count)
+        var shadowB = [[RockGPU]](repeating: [], count: fl.models.count)
+        for r in field.visible where r.kind >= FLORA_KIND {
+            let mi = r.kind - FLORA_KIND
+            guard mi < fl.models.count else { continue }
+            let M = fl.models[mi]
+            let range = M.isTree ? TREE_RANGE : BUSH_RANGE
+            let rel = r.pos - cam, dist = simd_length(rel)
+            if dist > range { continue }
+            let sizeKm = Double(r.size) * 0.001 * (1 - ss(range * 0.8, range, dist))
+            let gpu = RockGPU(posScale: F4(rel.f, Float(sizeKm)), quat: r.q.vector, tint: F4(r.tint, M.height))
+            if M.isTree && dist < 0.6 { shadowB[mi].append(gpu) }
+            let rad = Double(M.height) * sizeKm
+            let up = r.q.act(SIMD3<Float>(0, 1, 0))
+            let mid = rel + D3(Double(up.x), Double(up.y), Double(up.z)) * rad * 0.5
+            let vc = viewD * mid, depthV = -vc.z
+            if vc.z - rad > 0 || abs(vc.x) - rad > depthV * tanX || abs(vc.y) - rad > depthV * tanY { continue }
+            buckets[mi].append(gpu)
+        }
+        floraRing = (floraRing + 1) % floraBufs.count
+        let ptr = floraBufs[floraRing].contents().bindMemory(to: RockGPU.self, capacity: FLORA_CAP)
+        var segs: [FloraSeg] = [], at = 0
+        for (list, sh) in [(buckets, false), (shadowB, true)] {
+            for (mi, b) in list.enumerated() where !b.isEmpty {
+                let n = min(b.count, FLORA_CAP - at)
+                if n <= 0 { break }
+                for i in 0..<n { ptr[at + i] = b[i] }
+                segs.append(FloraSeg(model: mi, start: at, count: n, shadow: sh)); at += n
+            }
+        }
+        return segs
+    }
+
+    private func drawFlora(_ e: MTLRenderCommandEncoder, _ segs: [FloraSeg], shadow: Bool) {
+        guard let fl = flora else { return }
+        e.setFragmentSamplerState(sampler, index: 0)
+        for sg in segs where sg.shadow == shadow {
+            e.setVertexBuffer(floraBufs[floraRing], offset: sg.start * MemoryLayout<RockGPU>.stride, index: 2)
+            let M = fl.models[sg.model]
+            for p in M.parts {
+                var P = F4(p.cutout ? 1 : 0, M.isTree ? 1 : 0, 0, 0)
+                e.setFragmentBytes(&P, length: MemoryLayout<F4>.stride, index: 4)
+                e.setFragmentTexture(p.texture, index: 0)
+                e.setVertexBuffer(p.mesh.vb, offset: 0, index: 0)
+                e.drawIndexedPrimitives(type: .triangle, indexCount: p.mesh.indexCount, indexType: .uint32, indexBuffer: p.mesh.ib,
+                                        indexBufferOffset: 0, instanceCount: sg.count)
+            }
+        }
     }
 
     // MARK: - frame
@@ -458,19 +549,20 @@ final class Renderer {
         let shipModel = translate(g.pos - cam + shipUp * bounce) * simd_double4x4(g.q) * scaleM(D3(k, k, k))
         // the character's bone matrices for this frame
         boneRing = (boneRing + 1) % boneBufs.count
-        if !g.charSkin.isEmpty { let n = min(128, g.charSkin.count); g.charSkin.withUnsafeBytes { memcpy(boneBufs[boneRing].contents(), $0.baseAddress!, n * 64) } }
+        if !g.charSkin.isEmpty { let n = min(MAX_BONES, g.charSkin.count); g.charSkin.withUnsafeBytes { memcpy(boneBufs[boneRing].contents(), $0.baseAddress!, n * 64) } }
         var legModels: [float4x4] = []
         if g.gear > 0.01 {
             let e = g.gear * g.gear * (3 - 2 * g.gear)
             for leg in S0.legs { legModels.append(toFloat(shipModel * translate(leg.pos) * eulerXYZ(D3(leg.stow * (1 - e), 0, 0)) * scaleM(D3(1, 0.55 + 0.45 * e, 1)))) }
         }
         let rockSegs = prepareRocks(cam: cam, world: cw, aspect: Double(aspect))
+        let floraSegs = prepareFlora(cam: cam, aspect: Double(aspect))
         // tilting engine nacelles (and where each engine's flame starts)
         let tiltA = (g.tilt * g.tilt * (3 - 2 * g.tilt)) * .pi / 2
         func pivotXf(_ i: Int) -> simd_double4x4 { translate(S0.pivots[i]) * eulerXYZ(D3(tiltA, 0, 0)) }
         func engineXf(_ e: (pos: D3, r: Double, pivot: Int)) -> simd_double4x4 { e.pivot < 0 ? translate(e.pos) : pivotXf(e.pivot) * translate(e.pos) }
         let nacelleModels: [float4x4] = S0.nacelle == nil ? [] : S0.pivots.indices.map { toFloat(shipModel * pivotXf($0)) }
-        encodeShadows(cb, &F, cam: cam, camWorld: cw, camFwd: camFwd, shipModel: toFloat(shipModel), legModels: legModels, nacelleModels: nacelleModels, rockSegs: rockSegs)
+        encodeShadows(cb, &F, cam: cam, camWorld: cw, camFwd: camFwd, shipModel: toFloat(shipModel), legModels: legModels, nacelleModels: nacelleModels, rockSegs: rockSegs, floraSegs: floraSegs)
 
         let rp = MTLRenderPassDescriptor()
         rp.colorAttachments[0].texture = hdr; rp.colorAttachments[0].loadAction = .clear; rp.colorAttachments[0].storeAction = .store
@@ -562,6 +654,35 @@ final class Renderer {
                 enc.setVertexBuffer(L.vb, offset: 0, index: 0)
                 enc.setVertexBuffer(rockBufs[rockRing], offset: sg.start * MemoryLayout<RockGPU>.stride, index: 2)
                 enc.drawIndexedPrimitives(type: .triangle, indexCount: L.indexCount, indexType: .uint32, indexBuffer: L.ib, indexBufferOffset: 0, instanceCount: sg.count)
+            }
+        }
+
+        // trees, bushes and flowers
+        if floraSegs.contains(where: { !$0.shadow }) {
+            let up = simd_normalize(cam - cw.pos)
+            let cz = simd_dot(up, simd_normalize(g.sunPos - cam))
+            let tint = cw.atmo.rayleigh / max(cw.atmo.rayleigh.x, max(cw.atmo.rayleigh.y, cw.atmo.rayleigh.z))
+            var ru = RockU(sun: F4(sunTransmitCPU(cz, cw) * sunI, 0), sky: F4(tint, Float(ss(-0.15, 0.25, cz))), up: F4(up.f, 0), mean: .zero)
+            enc.setRenderPipelineState(pTree); enc.setDepthStencilState(dsWrite)
+            enc.setVertexBytes(&F, length: MemoryLayout<FrameU>.stride, index: 1); enc.setFragmentBytes(&F, length: MemoryLayout<FrameU>.stride, index: 1)
+            enc.setFragmentBytes(&ru, length: MemoryLayout<RockU>.stride, index: 3)
+            drawFlora(enc, floraSegs, shadow: false)
+        }
+
+        // ground cracks from superhero landings
+        if !g.cracks.isEmpty {
+            enc.setRenderPipelineState(pCrack); enc.setDepthStencilState(dsTest)
+            enc.setVertexBytes(&F, length: MemoryLayout<FrameU>.stride, index: 1)
+            let live = Set(g.cracks.map { $0.id })
+            for id in crackBufs.keys where !live.contains(id) { crackBufs[id] = nil }
+            for c in g.cracks where !c.verts.isEmpty {
+                if crackBufs[c.id] == nil { crackBufs[c.id] = device.makeBuffer(bytes: c.verts, length: c.verts.count * 4, options: .storageModeShared) }
+                guard let buf = crackBufs[c.id] else { continue }
+                let fade = Float(1 - ss(GroundCrack.life - 8, GroundCrack.life, c.t))
+                var o = ObjU(model: modelMatrix(rel: c.pos - cam), p0: F4(Float(c.t), Float(c.k), fade, 0))
+                enc.setVertexBytes(&o, length: MemoryLayout<ObjU>.stride, index: 2); enc.setFragmentBytes(&o, length: MemoryLayout<ObjU>.stride, index: 2)
+                enc.setVertexBuffer(buf, offset: 0, index: 0)
+                enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: c.verts.count / 5)
             }
         }
 

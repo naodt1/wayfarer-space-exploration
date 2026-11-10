@@ -2,7 +2,7 @@ import Foundation
 import Metal
 import simd
 
-// The player character: a rigged model (the orange robot, "Sci-fi O.B. Robot Unit TH-ICC02" by Jungle Jim, CC BY 4.0)
+// The player character: a rigged model ("Bot Blast R-325" by Oscar Creativo, CC BY 4.0; it replaced the orange robot)
 // prepared by Tools/blender/prep_skinned.py. Its own idle animation plays when you stand still; walking, running,
 // jumping and the jetpack are driven by code on top of a neutral frame of that idle (the same Pose the old astronaut
 // used), and the mesh is skinned on the GPU.
@@ -43,7 +43,7 @@ final class CharacterRig {
         for (i, s) in names.enumerated() { idx[s] = i }
         // pick the calmest frame: feet straight under the thighs, knees nearly straight
         let nm = names
-        func pos(_ g: [simd_double4x4], _ s: String) -> D3 { guard let i = nm.firstIndex(where: { $0.hasPrefix(s + "_") }) else { return .zero }; let c = g[i].columns.3; return D3(c.x, c.y, c.z) }
+        func pos(_ g: [simd_double4x4], _ s: String) -> D3 { guard let i = nm.firstIndex(where: { $0.hasPrefix(s + "_") && !$0.contains("scaleCompensation") }) else { return .zero }; let c = g[i].columns.3; return D3(c.x, c.y, c.z) }
         var best = 0, bestScore = 1e9
         for (fi, f) in frames.enumerated() {
             let g = CharacterRig.globals(f, parent)
@@ -60,10 +60,11 @@ final class CharacterRig {
                                                             simd_normalize(D3($0.columns.1.x, $0.columns.1.y, $0.columns.1.z)),
                                                             simd_normalize(D3($0.columns.2.x, $0.columns.2.y, $0.columns.2.z))))) }
     }
-    /// names in the rig carry a numeric suffix (CC_Base_L_Thigh_024): look them up by prefix
+    /// names in the rig carry a numeric suffix (CC_Base_L_Thigh_024): look them up by prefix. Some rigs also put a
+    /// "…_scaleCompensation" helper above each bone; skip those so the real bone is driven.
     func joint(_ prefix: String) -> Int? {
         if let i = idx[prefix] { return i }
-        return names.firstIndex { $0.hasPrefix(prefix + "_") }
+        return names.firstIndex { $0.hasPrefix(prefix + "_") && !$0.contains("scaleCompensation") }
     }
     static func local(_ p: JointPose) -> simd_double4x4 { translate(p.t) * simd_double4x4(p.q) * scaleM(D3(repeating: p.s)) }
     static func globals(_ f: [JointPose], _ parent: [Int]) -> [simd_double4x4] {

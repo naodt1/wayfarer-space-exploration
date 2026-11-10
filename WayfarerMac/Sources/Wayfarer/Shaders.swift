@@ -312,6 +312,44 @@ fragment float4 grassF(ROut in [[stage_in]], constant Frame& F [[buffer(1)]], co
     return float4(c, 1.0);
 }
 
+// trees, bushes and flowers (Flora.swift): rock instancing (tint.w = the model's height in metres), wind sway that
+// grows toward the crown, alpha cut-out leaves lit by wrapped sunlight and glowing when backlit. P.x: cut-out, P.y: tree
+vertex ROut treeV(uint vid [[vertex_id]], uint iid [[instance_id]], const device float* vb [[buffer(0)]], constant Frame& F [[buffer(1)]],
+                  const device RockInst* inst [[buffer(2)]]) {
+    uint b = vid * 8; RockInst I = inst[iid];
+    float3 p = float3(vb[b], vb[b+1], vb[b+2]);
+    float H = max(I.tint.w, 0.1), h = saturate(p.y / H), tm = F.sun.w;
+    float ph = dot(I.posScale.xyz, float3(1.0, 0.7, 1.3)) * 900.0;
+    float amp = (H > 3.0 ? 0.03 * H : 0.07 * H) * h * h;
+    float2 sway = float2(sin(tm * 0.9 + ph) + 0.35 * sin(tm * 2.3 + ph * 1.7 + p.y * 0.8), cos(tm * 0.7 + ph * 0.8)) * amp;
+    sway += float2(sin(tm * 6.1 + p.x * 3.0 + p.z * 2.0), cos(tm * 5.3 + p.z * 3.0)) * 0.012 * h * min(H, 3.0);   // leaves flutter
+    p.xz += sway;
+    float3 w = qrot(I.quat, p * I.posScale.w) + I.posScale.xyz;
+    ROut o; o.pos = F.viewProj * float4(w, 1.0); o.rel = w; o.n = qrot(I.quat, float3(vb[b+3], vb[b+4], vb[b+5]));
+    o.uv = float2(vb[b+6], vb[b+7]); o.tint = I.tint.rgb; o.h = h; o.size = I.posScale.w; return o;
+}
+fragment float4 treeF(ROut in [[stage_in]], constant Frame& F [[buffer(1)]], constant RockU& U [[buffer(3)]], constant float4& P [[buffer(4)]],
+                      texture2d<float> tex [[texture(0)]], depth2d_array<float> shadowMap [[texture(5)]], sampler smp [[sampler(0)]]) {
+    float4 t = tex.sample(smp, in.uv);
+    if (P.x > 0.5 && t.a < 0.42) discard_fragment();
+    float3 V = normalize(-in.rel), L = normalize(F.sun.xyz - in.rel), up = U.up.xyz;
+    float3 n = normalize(in.n); if (dot(n, V) < 0.0) n = -n;
+    float leaf = P.x;
+    float ndl = max(dot(n, L), 0.0);
+    float wrap = mix(ndl, (ndl * 0.45 + max(dot(up, L), 0.0) * 0.55) * 1.1, leaf);     // foliage reads as a soft volume
+    float trans = pow(saturate(dot(-V, L)), 3.0) * 0.55 * leaf;                          // sun glowing through the leaves
+    float sh = shadowAt(F, shadowMap, in.rel + L * 0.0004, up);
+    float3 albedo = t.rgb * in.tint;
+    float3 ambient = U.sky.rgb * F.misc.z * (0.08 + 0.1 * (0.5 + 0.5 * dot(n, up))) * U.sky.w + float3(0.004, 0.005, 0.008);
+    float ao = mix(P.y > 0.5 ? 0.45 : 0.6, 1.0, in.h);                                   // darker low down and inside the crown
+    float3 c = albedo * (U.sun.rgb * (wrap + trans) * sh + ambient * ao);
+    c *= 1.0 - 0.7 * blobShade(F, in.rel);
+    return float4(c, 1.0);
+}
+fragment void treeShadowF(ROut in [[stage_in]], constant float4& P [[buffer(4)]], texture2d<float> tex [[texture(0)]], sampler smp [[sampler(0)]]) {
+    if (P.x > 0.5 && tex.sample(smp, in.uv).a < 0.42) discard_fragment();
+}
+
 // normal mapping without stored tangents (cotangent frame from screen-space derivatives)
 float3 perturbNormal(float3 n, float3 p, float2 uv, float3 tn) {
     float3 dp1 = dfdx(p), dp2 = dfdy(p); float2 duv1 = dfdx(uv), duv2 = dfdy(uv);
@@ -345,6 +383,26 @@ fragment float4 rockF(ROut in [[stage_in]], constant Frame& F [[buffer(1)]], con
     float3 c = albedo * (U.sun.rgb * ndl * sh + ambient * ao) + U.sun.rgb * spec * ndl * sh;
     c *= 1.0 - 0.7 * blobShade(F, in.rel);
     return float4(c, 1.0);
+}
+
+// ---------------------------------------------------------------- ground cracks (Cracks.swift)
+// premultiplied: alpha darkens the ground along the fissures, rgb adds the cooling glow. p0: seconds since impact, strength, fade
+struct CrOut { float4 pos [[position]]; float2 a; };
+vertex CrOut crackV(uint vid [[vertex_id]], const device float* vb [[buffer(0)]], constant Frame& F [[buffer(1)]], constant Obj& O [[buffer(2)]]) {
+    float3 p = float3(vb[vid*5], vb[vid*5+1], vb[vid*5+2]);
+    CrOut o; o.pos = F.viewProj * (O.model * float4(p, 1.0)); o.a = float2(vb[vid*5+3], vb[vid*5+4]); return o;
+}
+fragment float4 crackF(CrOut in [[stage_in]], constant Obj& O [[buffer(2)]]) {
+    float t = O.p0.x, k = O.p0.y, fade = O.p0.z;
+    float along = in.a.x, across = abs(in.a.y * 2.0 - 1.0);
+    float core = 1.0 - smoothstep(0.1, 1.0, across);
+    float dark = (1.0 - smoothstep(0.35, 1.0, across)) * (0.95 - 0.4 * along) * fade;     // a dark gap around the seam
+    // molten-hot at first, cooling fast: white-yellow in the very centre of a fissure, orange, then dull red at its lips
+    float heat = exp(-t / 1.3) * (1.0 - along * 0.8) * k;
+    float c2 = core * core, c6 = c2 * c2 * c2;
+    float3 col = float3(1.2, 0.12, 0.02) * c6 + float3(2.8, 1.0, 0.12) * c6 * c6 + float3(3.0, 2.4, 1.4) * pow(core, 24.0);
+    float3 glow = col * heat * 2.4 + float3(1.0, 0.3, 0.06) * exp(-t / 5.0) * c6 * 0.12 * k;     // a last ember glow
+    return float4(glow * fade, dark);
 }
 
 // ---------------------------------------------------------------- unit-sphere based objects (sun, clouds)
