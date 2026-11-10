@@ -6,19 +6,23 @@ render_mode cull_disabled;
 
 uniform sampler2DArray layer_albedo : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2DArray layer_pack : filter_linear_mipmap_anisotropic, repeat_enable;   // normal xy, roughness, AO
-uniform float tint_k = 0.65;                 // how much the region colour tints the photo layers
+uniform float tint_k = 0.65;
+uniform float space_haze = 0.0;             // 0 in the air … 1 from orbit: the atmosphere veils the ground
+uniform vec3 sun_dir = vec3(0.0, 1.0, 0.0);                 // how much the region colour tints the photo layers
 
 varying vec3 local_pos;
 varying vec3 geo_n;
 varying vec4 lw;                            // grass, forest, rock, sand
 varying float snow_w;
+varying float elev;
+varying float red_w;
 instance uniform vec3 origin_mod;           // the chunk centre modulo 1 km (computed in double precision on the CPU)
 
-const vec3 MEANS[5] = vec3[](vec3(0.1186, 0.1523, 0.0304), vec3(0.3135, 0.1721, 0.0651), vec3(0.0785, 0.0911, 0.1056),
-							 vec3(0.3307, 0.2571, 0.1546), vec3(0.7323, 0.8584, 0.9745));
+const vec3 MEANS[6] = vec3[](vec3(0.1186, 0.1523, 0.0304), vec3(0.3135, 0.1721, 0.0651), vec3(0.0785, 0.0911, 0.1056),
+							 vec3(0.3307, 0.2571, 0.1546), vec3(0.7323, 0.8584, 0.9745), vec3(0.1977, 0.089, 0.039));
 
 void vertex() {
-	local_pos = VERTEX; geo_n = NORMAL; lw = CUSTOM0; snow_w = COLOR.a;
+	local_pos = VERTEX; geo_n = NORMAL; lw = CUSTOM0; snow_w = COLOR.a; elev = UV.x; red_w = UV.y;
 }
 
 struct Surf { vec3 alb; vec3 n; float rough; float ao; };
@@ -45,8 +49,8 @@ void fragment() {
 	float dist = length(VERTEX);
 	vec3 wp = origin_mod + local_pos;                     // metres, wrapped every 1 km (all scales below divide 1 km)
 	vec3 gn = normalize(geo_n);
-	float wt[5] = float[](lw.x, lw.y, lw.z, lw.w, snow_w);
-	float wsum = lw.x + lw.y + lw.z + lw.w + snow_w;
+	float wt[6] = float[](lw.x, lw.y, lw.z, lw.w, snow_w, red_w);
+	float wsum = lw.x + lw.y + lw.z + lw.w + snow_w + red_w;
 	float nearK = (1.0 - smoothstep(600.0, 6000.0, dist)) * clamp(wsum * 1.5, 0.0, 1.0);
 	vec3 c = COLOR.rgb;
 	vec3 n = gn;
@@ -60,7 +64,7 @@ void fragment() {
 		// the two strongest layers
 		int l0 = 0, l1 = 1;
 		if (wt[1] > wt[0]) { l0 = 1; l1 = 0; }
-		for (int l = 2; l < 5; l++) { if (wt[l] > wt[l0]) { l1 = l0; l0 = l; } else if (wt[l] > wt[l1]) { l1 = l; } }
+		for (int l = 2; l < 6; l++) { if (wt[l] > wt[l0]) { l1 = l0; l0 = l; } else if (wt[l] > wt[l1]) { l1 = l; } }
 		vec3 alb = vec3(0.0), tn = vec3(0.0); float rs = 0.0, aos = 0.0, tot = 0.0;
 		for (int j = 0; j < 2; j++) {
 			int l = j == 0 ? l0 : l1;
@@ -84,11 +88,34 @@ void fragment() {
 			n = normalize(gn + tn / tot * 0.9 * nearK);
 		}
 	}
-	bool water = wsum < 0.01 && COLOR.b > COLOR.g * 1.6 && COLOR.b > 0.03;
+	// the coastline, drawn per pixel from the interpolated elevation (smooth, not along triangle edges)
+	bool water = elev < 0.0;
+	if (water) {
+		c = mix(vec3(0.0048, 0.078, 0.24), vec3(0.0012, 0.0080, 0.042), smoothstep(0.0, -2.5, elev));
+		c = mix(vec3(0.03, 0.16, 0.26), c, smoothstep(0.0, -0.06, elev));          // turquoise shallows
+		n = gn;
+	} else {
+		c = mix(c, vec3(0.54, 0.42, 0.22), smoothstep(0.035, 0.0, elev) * (1.0 - nearK * 0.6));   // a thin sand rim
+	}
 	ALBEDO = c;
 	NORMAL = normalize((VIEW_MATRIX * vec4(n, 0.0)).xyz);
 	ROUGHNESS = water ? 0.08 : mix(0.92, rough, nearK);
+	if (!water) {
+		// sums of waves with whole numbers of cycles per km, so they tile with the 1 km position wrap
+		float w = 0.0062831853;
+		float tone = 0.5 + 0.2 * sin(dot(wp, vec3(3.0, 1.0, 2.0)) * w) + 0.17 * sin(dot(wp, vec3(-5.0, 2.0, 7.0)) * w + 1.3)
+				   + 0.13 * sin(dot(wp, vec3(11.0, -6.0, 4.0)) * w + 2.1);
+		ALBEDO *= 1.15 * mix(0.95, 1.05, tone);
+	}                     // the ground reads a touch brighter, like the Mac version
 	AO = mix(1.0, ao, nearK); AO_LIGHT_AFFECT = 0.3;
 	METALLIC = 0.0;
 	SPECULAR = water ? 0.6 : 0.25;
+	// from high up, the air between you and the ground: bluish haze, brighter on the day side
+	if (space_haze > 0.001) {
+		vec3 wn = normalize(geo_n);
+		float day = smoothstep(-0.2, 0.3, dot(wn, sun_dir));
+		float k = space_haze * (0.35 + 0.65 * (1.0 - clamp(dot(normalize(NORMAL), normalize(VIEW)), 0.0, 1.0)));
+		ALBEDO *= 1.0 - 0.25 * k;
+		EMISSION = vec3(0.12, 0.24, 0.5) * k * day * 0.35;
+	}
 }

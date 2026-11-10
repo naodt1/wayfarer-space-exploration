@@ -6,7 +6,8 @@ extends Node3D
 
 const HALF := 160.0                 # field half-size (m)
 const G := 64                       # height-grid resolution across the field
-const MAX_GRASS := 42000
+const MAX_GRASS := 42000          # at HIGH quality; scaled by set_density()
+var max_grass := MAX_GRASS
 const MAX_ROCKS := 260
 
 var planet: Planet
@@ -37,6 +38,12 @@ func _init(p: Planet) -> void:
 	rocks.material_override = rmat
 	rocks.extra_cull_margin = 200.0
 	add_child(rocks)
+
+## switch to another world (the field is rebuilt there)
+func set_planet(p: Planet) -> void:
+	if p == planet: return
+	planet = p; has_field = false; ax = 1e12
+	grass.multimesh.instance_count = 0; rocks.multimesh.instance_count = 0
 
 ## called every frame with the camera's double-precision position and altitude
 func update(cx: float, cy: float, cz: float, cam_alt: float) -> void:
@@ -83,7 +90,7 @@ func _scatter(px: float, py: float, pz: float) -> void:
 			var x := -HALF + i * step; var y := -HALF + j * step
 			var d := (A + t1 * x + t2 * y).normalized()
 			var e := planet.height(d, 14)
-			var h := Planet.R + maxf(e, 0.0) * 1000.0 - ar - (x * x + y * y) / (2.0 * Planet.R)
+			var h := planet.R + maxf(e, 0.0) * 1000.0 - ar - (x * x + y * y) / (2.0 * planet.R)
 			var k := j * (G + 1) + i
 			off[k] = t1 * x + t2 * y + up * h; elev[k] = e; dirs[k] = d
 	for j in G + 1:
@@ -100,9 +107,10 @@ func _scatter(px: float, py: float, pz: float) -> void:
 	rng.seed = hash(Vector3i(int(px / 7.0), int(py / 7.0), int(pz / 7.0)))
 	# grass
 	var gbuf := PackedFloat32Array(); var ng := 0
-	var tries := MAX_GRASS * 2
+	var cap := max_grass
+	var tries := cap * 2
 	for s in tries:
-		if ng >= MAX_GRASS: break
+		if ng >= cap: break
 		var rr := HALF * pow(rng.randf(), 0.75); var th := rng.randf() * TAU      # denser near the middle of the field
 		var x := cos(th) * rr; var y := sin(th) * rr
 		var fi := (x + HALF) / step; var fj := (y + HALF) / step
@@ -155,13 +163,13 @@ func _push(buf: PackedFloat32Array, b: Basis, o: Vector3, c: Color) -> void:
 func _clump_mesh() -> ArrayMesh:
 	var st := SurfaceTool.new(); st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var rng := RandomNumberGenerator.new(); rng.seed = 7
-	for bl in 11:
+	for bl in 7:
 		var ang := rng.randf() * TAU; var rad := rng.randf() * 0.22
 		var base := Vector3(cos(ang) * rad, 0.0, sin(ang) * rad)
 		var face := rng.randf() * TAU
 		var side := Vector3(cos(face), 0.0, sin(face)); var lean := Vector3(-side.z, 0.0, side.x) * rng.randf_range(0.1, 0.35)
-		var hgt := rng.randf_range(0.3, 0.75); var wid := rng.randf_range(0.025, 0.045)
-		var segs := 3
+		var hgt := rng.randf_range(0.22, 0.5); var wid := rng.randf_range(0.035, 0.06)
+		var segs := 2
 		var prev_l := Vector3.ZERO; var prev_r := Vector3.ZERO
 		for s in segs + 1:
 			var t := float(s) / segs
@@ -195,6 +203,12 @@ func _rock_mesh() -> ArrayMesh:
 	var m := ArrayMesh.new(); m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
 	st.create_from(m, 0); st.generate_normals()
 	return st.commit()
+
+## grass amount for the graphics quality (1 = the full field); re-scatters the field
+func set_density(k: float) -> void:
+	var n := int(MAX_GRASS * k)
+	if n != max_grass:
+		max_grass = n; has_field = false
 
 func _exit_tree() -> void:
 	if task != -1:
